@@ -5,6 +5,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 
 const ROOT = __dirname, PUBLIC = path.join(ROOT, 'public');
 if (fs.existsSync(path.join(ROOT, '.env'))) process.loadEnvFile(path.join(ROOT, '.env')); // before db.js reads its settings
@@ -15,6 +16,8 @@ const ai = require('./lib/ai');
 const wa = require('./lib/whatsapp');
 
 const MAX_BODY = 256 * 1024;
+const KEEP_DELETED_DAYS = 30;       // a deleted member or gym can be brought back for this long, then it goes for good
+const BACKUP_DAYS = Number(process.env.BACKUP_DAYS) || 7; // how many daily backups of each gym are kept
 const SEND_FROM = 6, SEND_TILL = 21; // reminders go out by themselves from 6 in the morning, and never at night
 const TRIAL_MONTHS = 1, PRICE = 999; // a gym's first month from its first sign-in is free; after that it pays PRICE a month
 const OWNER_DAYS = 30;               // how long the owner of the service stays signed in
@@ -29,6 +32,7 @@ const stamp = () => new Date().toISOString();
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const same = (a, b) => crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const sum = (list, key) => list.reduce((s, x) => s + x[key], 0);
+const live = (x) => !x.deletedAt; // a deleted member or gym stays in the store, marked, until it is cleared out
 const required = (v, label, max) => G.str(v, max) || fail(400, `${label} is required.`);
 const amount = (v, label, max = 1e7) => { const n = Number(v); return n >= 0 && n <= max ? Math.round(n) : fail(400, `${label} must be a number from 0 to ${max.toLocaleString('en-IN')}.`); };
 const phoneOf = (v) => { const d = G.lastTen(v); return /^[6-9]\d{9}$/.test(d) ? d : fail(400, 'The mobile number must have 10 digits.'); };
@@ -47,7 +51,7 @@ const monthsAfter = (iso, n) => G.addMonths(iso.slice(0, 10), n) + iso.slice(10)
 // PAY_NOTE says where the money goes ('UPI name@bank, or call 98290 00000'). It is shown wherever a gym is asked to pay.
 const payNote = () => G.str(process.env.PAY_NOTE, 200);
 const over = (g) => `Your ${g.renewals.length ? 'plan' : 'free trial'} is over. Pay ₹${PRICE} to start the service again.${payNote() && ` ${payNote()}`}`;
-const gymById = async (id) => (await db.find('gyms', { _id: id }))[0];
+const gymById = async (id) => (await db.find('gyms', { _id: id })).find(live);
 
 // `details` is the gym as its Settings page holds it: name, owner, mobile, address, timings, amenities, UPI and prices.
 async function createGym(email, password, details) {
@@ -143,22 +147,52 @@ function memberOf(c, periods, paid) {
 }
 async function memberById(gymId, id) {
   const [c] = await db.find('customers', { _id: id, gymId });
-  if (!c) fail(404, 'Member not found.');
+  if (!c || c.deletedAt) fail(404, 'Member not found.');
   return memberOf(c, await db.find('memberships', { gymId, customerId: id }), await db.find('transactions', { gymId, customerId: id }));
 }
 // Everything of one gym.
 async function loadGym(account) {
-  const [customers, periods, paid] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id })));
-  paid.sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
-  return { gym: account.details, sent: account.sent,
+  const [all, periods, everyPaid] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id })));
+  const customers = all.filter(live), here = new Set(customers.map((c) => c._id));
+  const paid = everyPaid.filter((t) => here.has(t.customerId)).sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
+  return { gym: account.details, sent: account.sent, deleted: all.filter((c) => c.deletedAt).map((c) => ({ id: c._id, name: c.name, phone: c.phone, deletedAt: c.deletedAt })),
     members: customers.map((c) => memberOf(c, periods.filter((p) => p.customerId === c._id), paid.filter((t) => t.customerId === c._id))),
     payments: paid.map((t) => ({ id: t._id, memberId: t.customerId, name: t.name, amount: t.amount, date: t.date, mode: t.mode })) };
 }
-// A member goes with every period they bought and every payment they made.
-async function dropMember(gymId, id) {
+// A deleted member is only marked: they leave every screen and every total, and can be brought back for a while.
+const dropMember = (gymId, id) => db.update('customers', { _id: id, gymId }, { deletedAt: stamp() });
+// For good: the member goes with every period they bought and every payment they made.
+async function purgeMember(gymId, id) {
   await db.remove('customers', { _id: id, gymId });
   await db.remove('memberships', { gymId, customerId: id });
   await db.remove('transactions', { gymId, customerId: id });
+}
+async function purgeGym(id) {
+  for (const name of ['sessions', 'backups', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
+  await db.remove('gyms', { _id: id });
+}
+
+// ---- backups: once a day, everything each gym holds, compressed, kept for BACKUP_DAYS days
+
+const packed = (data) => zlib.gzipSync(JSON.stringify(data)).toString('base64');
+const unpacked = (text) => JSON.parse(zlib.gunzipSync(Buffer.from(text, 'base64'), { maxOutputLength: 200e6 }));
+async function snapshot(g, date) {
+  const [customers, memberships, transactions] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: g._id })));
+  await db.remove('backups', { _id: `${g._id}:${date}` });
+  await db.insert('backups', { _id: `${g._id}:${date}`, gymId: g._id, date, at: stamp(), members: customers.filter(live).length, data: packed({ details: g.details, customers, memberships, transactions }) });
+}
+// The day's housekeeping: what was deleted more than KEEP_DELETED_DAYS ago goes for good, and every gym gets its
+// backup for the day. It is safe to run again on the same day.
+// ponytail: reads each gym's kept backups to see their dates; store the dates apart if the backups grow large.
+async function daily(now = new Date()) {
+  const today = G.todayISO(now), cutoff = new Date(now - KEEP_DELETED_DAYS * 864e5).toISOString();
+  for (const g of await db.find('gyms')) {
+    if (g.deletedAt) { if (g.deletedAt < cutoff) await purgeGym(g._id); continue; }
+    for (const c of await db.find('customers', { gymId: g._id })) if (c.deletedAt && c.deletedAt < cutoff) await purgeMember(g._id, c._id);
+    const kept = await db.find('backups', { gymId: g._id });
+    if (!kept.some((b) => b.date === today)) await snapshot(g, today);
+    for (const b of kept) if (G.isDate(b.date) && b.date <= G.addDays(today, -BACKUP_DAYS)) await db.remove('backups', { _id: b._id });
+  }
 }
 const pay = (gymId, customerId, name, membershipId, amt, mode, date) => amt > 0 && db.insert('transactions',
   { _id: newId(), gymId, customerId, membershipId, name, amount: amt, mode: MODES.includes(mode) ? mode : 'Cash', date, createdAt: stamp() });
@@ -174,7 +208,7 @@ async function markSent(gymId, today, key) {
 async function runReminders(today = G.todayISO()) {
   const now = stamp(), count = { sent: 0, failed: 0 };
   for (const account of await db.find('gyms')) {
-    if (account.disabled || !(account.validTill > now)) continue;
+    if (account.deletedAt || account.disabled || !(account.validTill > now)) continue;
     for (const r of G.reminders(await loadGym(account), today)) {
       try {
         await wa.send(r.phone, G.TEMPLATES[r.type].name, r.params);
@@ -190,10 +224,11 @@ async function runReminders(today = G.todayISO()) {
 }
 // Looks every minute whether today's reminders are due. A host that sleeps (a free one) sends them when it is next
 // woken, so something has to open the site a little before six: README.md says how.
-let remindedOn = '';
+let remindedOn = '', tidiedOn = '';
 function startReminders() {
   const tick = () => {
     const today = G.todayISO(), hour = new Date().getHours();
+    if (tidiedOn !== today) { tidiedOn = today; daily().catch((e) => console.error('The daily backup failed:', e)); }
     if (!wa.enabled() || remindedOn === today || hour < SEND_FROM || hour >= SEND_TILL) return;
     remindedOn = today;
     runReminders(today).then((c) => console.log(`WhatsApp reminders for ${today}: ${c.sent} sent, ${c.failed} failed`), (e) => console.error('WhatsApp reminders failed:', e));
@@ -205,7 +240,7 @@ function startReminders() {
 // What the owner may type or say about a member, apart from the plan and the money.
 async function details(b, account, selfId) {
   const t = ai.tidy(b, account.details), phone = phoneOf(b.phone);
-  const other = (await db.find('customers', { gymId: account._id, phone })).find((c) => c._id !== selfId);
+  const other = (await db.find('customers', { gymId: account._id, phone })).find((c) => c._id !== selfId && live(c));
   if (other) fail(409, `${other.name} already has this mobile number.`);
   return { name: required(b.name, 'The name', 80), phone, gender: t.gender || '', age: t.age || '', weight: t.weight || '', height: t.height || '', goal: t.goal || '',
     health: t.health || '', batch: t.batch || '', notes: G.str(b.notes, 500) };
@@ -239,11 +274,11 @@ const open = {
     const tries = bucket(`login ${clientOf(req)} ${email}`, 15 * 60e3), all = bucket(`login ${clientOf(req)}`, 15 * 60e3);
     if (tries.n >= 10 || all.n >= 50) fail(429, 'Too many wrong attempts. Try again in 15 minutes.');
     const owner = !!email && email === adminEmail();
-    let [g] = owner ? [] : await db.find('gyms', { email });
+    let [g] = owner ? [] : (await db.find('gyms', { email })).filter(live);
     // A gym may also type its own name, as long as no other gym has the same one.
     // ponytail: reads every gym when the username is not found; keep a lowercase name to look up when there are thousands.
     if (!owner && !g && email) {
-      const named = (await db.find('gyms')).filter((x) => G.str(x.details.name).toLowerCase().replace(/\s+/g, ' ') === email.replace(/\s+/g, ' '));
+      const named = (await db.find('gyms')).filter((x) => live(x) && G.str(x.details.name).toLowerCase().replace(/\s+/g, ' ') === email.replace(/\s+/g, ' '));
       if (named.length === 1) [g] = named;
     }
     // The same work is done for an unknown name, so the time taken does not say which names exist.
@@ -272,7 +307,7 @@ const open = {
 const either = {
   'GET /api/data': async ({ admin, account }) => {
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
-    if (!account) return { user, gym: null, members: [], payments: [], sent: {}, price: PRICE, aiEnabled: ai.aiEnabled() };
+    if (!account) return { user, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, aiEnabled: ai.aiEnabled() };
     const data = await loadGym(account);
     return { user, ...data, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
@@ -310,10 +345,19 @@ const gymRoutes = {
     await memberById(gymId, id);
     await dropMember(gymId, id);
   }),
+  // A deleted member comes back with every period and payment, unless their mobile number has since gone to another.
+  'POST /api/members/:id/restore': write(async ({ gymId, id }) => {
+    const [c] = await db.find('customers', { _id: id, gymId });
+    if (!c || !c.deletedAt) fail(404, 'Member not found.');
+    const other = (await db.find('customers', { gymId, phone: c.phone })).find(live);
+    if (other) fail(409, `${other.name} now has this mobile number.`);
+    await db.update('customers', { _id: id, gymId }, { deletedAt: null });
+    return memberById(gymId, id);
+  }),
   // The sample members that 'Load sample members' made, all at once.
   'DELETE /api/sample': write(async ({ gymId }) => {
-    const sample = (await db.find('customers', { gymId })).filter(isSample);
-    for (const c of sample) await dropMember(gymId, c._id);
+    const sample = (await db.find('customers', { gymId })).filter((c) => live(c) && isSample(c));
+    for (const c of sample) await purgeMember(gymId, c._id); // nothing worth bringing back
     return { removed: sample.length };
   }),
   // A payment typed in wrongly is corrected: its amount, how it was paid, its date. Never to more than was owed.
@@ -381,7 +425,7 @@ const gymRoutes = {
 
   // Sample members, for looking around an empty gym.
   'POST /api/seed': write(async ({ account, gymId }) => {
-    if ((await db.find('customers', { gymId })).length) fail(400, 'Sample data is only for an empty gym.');
+    if ((await db.find('customers', { gymId })).some(live)) fail(400, 'Sample data is only for an empty gym.');
     const today = G.todayISO(), d = account.details;
     await db.update('gyms', { _id: gymId }, { details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
       price1: d.price1 || 1000, price3: d.price3 || 2700, price12: d.price12 || 9000, ptPrice: d.ptPrice || 2000, dietPrice: d.dietPrice || 500 } });
@@ -398,12 +442,14 @@ const gymRoutes = {
 const adminRoutes = {
   'GET /api/admin/gyms': async () => {
     // ponytail: reads every member and payment of every gym to add them up; count in the database when that gets slow.
-    const [gyms, customers, periods, paid] = await Promise.all(['gyms', 'customers', 'memberships', 'transactions'].map((name) => db.find(name)));
+    const [gyms, everyone, everyPeriod, everyPaid] = await Promise.all(['gyms', 'customers', 'memberships', 'transactions'].map((name) => db.find(name)));
+    const customers = everyone.filter(live), here = new Set(customers.map((c) => c._id));
+    const periods = everyPeriod.filter((p) => here.has(p.customerId)), paid = everyPaid.filter((t) => here.has(t.customerId));
     const of = (list, g) => list.filter((x) => x.gymId === g._id);
     return gyms.map((g) => {
       const got = sum(of(paid, g), 'amount');
       return { id: g._id, email: g.email, gym: g.details.name, owner: g.details.owner, phone: g.details.phone, createdAt: g.createdAt, disabled: g.disabled, firstLoginAt: g.firstLoginAt,
-        lastLoginAt: g.lastLoginAt, validTill: g.validTill, paidMonths: sum(g.renewals, 'months'), members: of(customers, g).length, collected: got, due: sum(of(periods, g), 'fee') - got };
+        lastLoginAt: g.lastLoginAt, validTill: g.validTill, deletedAt: g.deletedAt || null, paidMonths: sum(g.renewals, 'months'), members: of(customers, g).length, collected: got, due: sum(of(periods, g), 'fee') - got };
     });
   },
   'POST /api/admin/gyms': async ({ body }) => {
@@ -412,11 +458,40 @@ const adminRoutes = {
     const made = await createGym(loginName(body.email), newPassword(body.password), details);
     return made ? { id: made._id } : fail(409, 'That username is already taken.');
   },
-  // A gym goes with everything it holds: its members, their periods and payments, and its login.
+  // A deleted gym is signed out and hidden, with everything it holds kept for KEEP_DELETED_DAYS days in case it was a mistake.
   'DELETE /api/admin/gyms/:id': async ({ id }) => {
     if (!(await gymById(id))) fail(404, 'Gym not found.');
-    for (const name of ['sessions', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
-    await db.remove('gyms', { _id: id });
+    await db.update('gyms', { _id: id }, { deletedAt: stamp() });
+    await db.remove('sessions', { gymId: id });
+  },
+  'POST /api/admin/gyms/:id/restore': async ({ id }) => {
+    const [g] = await db.find('gyms', { _id: id });
+    if (!g || !g.deletedAt) fail(404, 'Gym not found.');
+    await db.update('gyms', { _id: id }, { deletedAt: null });
+  },
+  // The days a gym can be put back to, newest first.
+  'GET /api/admin/gyms/:id/backups': async ({ id }) => (await db.find('backups', { gymId: id })).map((b) => ({ date: b.date, at: b.at, members: b.members })).sort((a, b) => (a.at < b.at) - (a.at > b.at)),
+  // Puts a gym's members, periods and payments back to how a kept day had them. What it holds now is kept first, as
+  // 'before restore', so a restore to the wrong day can itself be taken back. The login and the time left do not change.
+  'POST /api/admin/gyms/:id/backups': async ({ body, id }) => {
+    const g = (await gymById(id)) || fail(404, 'Gym not found.');
+    const [b] = await db.find('backups', { _id: `${id}:${G.str(body.date, 20)}` });
+    if (!b) fail(404, 'There is no backup of that day.');
+    return write(async () => {
+      const then = unpacked(b.data);
+      if (b.date !== 'before restore') await snapshot(g, 'before restore');
+      for (const name of ['transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
+      for (const name of ['customers', 'memberships', 'transactions']) await db.insert(name, then[name].filter((d) => d.gymId === id));
+      await db.update('gyms', { _id: id }, { details: then.details });
+      return { members: then.customers.filter(live).length };
+    })({ gymId: id });
+  },
+  // Everything, in one compressed file, to keep somewhere other than the database. restore.js puts it back.
+  'GET /api/admin/backup': async ({ res }) => {
+    const all = {};
+    for (const name of ['gyms', 'customers', 'memberships', 'transactions']) all[name] = await db.find(name);
+    const body = zlib.gzipSync(JSON.stringify({ madeAt: stamp(), ...all }));
+    send(res, 200, 'application/gzip', body, { 'Content-Disposition': `attachment; filename="gymsaathi-backup-${G.todayISO()}.json.gz"` });
   },
   'PUT /api/admin/gyms/:id': async ({ body, id }) => {
     const g = (await gymById(id)) || fail(404, 'Gym not found.');
@@ -491,7 +566,7 @@ async function start(port) {
   return new Promise((resolve, reject) => { server.once('error', reject).listen(port, () => resolve(server)); });
 }
 
-module.exports = { start, runReminders };
+module.exports = { start, runReminders, daily };
 
 if (require.main === module) {
   start(Number(process.env.PORT) || 3000).then(

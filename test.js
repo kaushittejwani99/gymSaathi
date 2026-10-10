@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const G = require('./lib/core');
 
 function coreChecks() {
@@ -46,10 +47,10 @@ async function apiChecks() {
   const today = G.todayISO();
   const browser = () => {
     let cookie = '';
-    return async (method, url, body) => {
+    return async (method, url, body, raw) => {
       const res = await fetch(`http://127.0.0.1:${srv.address().port}${url}`, { method, headers: { 'Content-Type': 'application/json', cookie }, body: body && JSON.stringify(body) });
       cookie = (res.headers.get('set-cookie') || cookie).split(';')[0];
-      return [res.status, await res.json().catch(() => ({}))];
+      return [res.status, raw ? Buffer.from(await res.arrayBuffer()) : await res.json().catch(() => ({}))];
     };
   };
   const ok = async (call) => { const [status, body] = await call; assert.equal(status, 200, JSON.stringify(body)); return body; };
@@ -257,9 +258,44 @@ async function apiChecks() {
     await db.update('customers', { gymId: third, phone: '9829011101' }, { sample: false }); // one loaded before sample members were marked
     assert.deepEqual([(await ok(ox('GET', '/api/data'))).members.length, (await ok(ox('DELETE', '/api/sample'))).removed, (await ok(ox('GET', '/api/data'))).members.map((m) => m.name),
       (await db.find('memberships', { gymId: third })).length, (await db.find('transactions', { gymId: third })).length], [9, 8, ['Own Member'], 1, 0]);
-    // The owner of the service deletes a gym with everything it holds
-    assert.deepEqual([await status(ox('DELETE', `/api/admin/gyms/${third}`)), (await ok(owner('DELETE', `/api/admin/gyms/${third}`))).ok, await status(ox('GET', '/api/data')), await listed('oxfit'),
-      (await db.find('customers', { gymId: third })).length, (await db.find('memberships', { gymId: third })).length, (await db.find('sessions', { gymId: third })).length], [403, true, 401, undefined, 0, 0, 0]);
+    // The owner of the service deletes a gym: it is signed out and hidden, yet comes back with all it held
+    assert.deepEqual([await status(ox('DELETE', `/api/admin/gyms/${third}`)), (await ok(owner('DELETE', `/api/admin/gyms/${third}`))).ok, await status(ox('GET', '/api/data')),
+      await status(ox('POST', '/api/auth/login', { email: 'oxfit', password: 'first-password' })), !!(await listed('oxfit')).deletedAt, (await db.find('customers', { gymId: third })).length], [403, true, 401, 401, true, 1]);
+    await ok(owner('POST', `/api/admin/gyms/${third}/restore`));
+    await ok(ox('POST', '/api/auth/login', { email: 'oxfit', password: 'first-password' }));
+    assert.deepEqual([(await ok(ox('GET', '/api/data'))).members.map((m) => m.name), (await listed('oxfit')).deletedAt, await status(owner('POST', `/api/admin/gyms/${third}/restore`))], [['Own Member'], null, 404]);
+
+    // Every day each gym's data is kept. The owner can put a gym back to a kept day, and what it held just before that
+    // is kept too, so a restore can itself be taken back. Running the day's work twice makes one backup
+    const { daily } = require('./server'), backups = `/api/admin/gyms/${third}/backups`;
+    await daily();
+    await daily();
+    const own = (await ok(ox('GET', '/api/data'))).members[0];
+    await ok(ox('POST', `/api/members/${own.id}/pay`, { amount: 300 }));
+    await ok(ox('POST', '/api/members', { name: 'Later Member', phone: '9829011198', months: 3 }));
+    assert.deepEqual([(await ok(owner('GET', backups))).map((b) => [b.date, b.members]), await status(owner('POST', backups, { date: '2020-01-01' })), await status(ox('GET', backups))], [[[today, 1]], 404, 403]);
+    assert.equal((await ok(owner('POST', backups, { date: today }))).members, 1);
+    data = await ok(ox('GET', '/api/data'));
+    assert.deepEqual([data.members.map((m) => [m.name, m.paid]), data.payments.length, (await ok(owner('GET', backups))).map((b) => [b.date, b.members])], [[['Own Member', 0]], 0, [['before restore', 2], [today, 1]]]);
+    await ok(owner('POST', backups, { date: 'before restore' }));
+    data = await ok(ox('GET', '/api/data'));
+    assert.deepEqual([data.members.map((m) => m.name).sort(), data.payments.map((p) => p.amount)], [['Later Member', 'Own Member'], [300]]);
+    // A backup older than a week goes when a newer day's is made
+    await daily(new Date(Date.now() + 8 * 864e5));
+    assert.deepEqual((await ok(owner('GET', backups))).map((b) => b.date).sort(), [G.addDays(today, 8), 'before restore'].sort());
+    // Everything can be downloaded as one compressed file, without the sign-ins
+    const all = JSON.parse(zlib.gunzipSync((await owner('GET', '/api/admin/backup', undefined, true))[1]));
+    assert.deepEqual([all.gyms.some((g) => g.email === 'oxfit'), all.customers.some((c) => c.name === 'Own Member'), all.transactions.length > 0, 'sessions' in all, await status(ox('GET', '/api/admin/backup'))], [true, true, true, false, 403]);
+    // restore.js puts that file back into an empty store, and refuses to without --yes. (Not run against MongoDB: it would replace the real database.)
+    if (!MONGO) {
+      const into = fs.mkdtempSync(path.join(os.tmpdir(), 'gymsaathi-restore-')), file = path.join(into, 'backup.json.gz');
+      fs.writeFileSync(file, zlib.gzipSync(JSON.stringify(all)));
+      const run = (...args) => require('node:child_process').spawnSync(process.execPath, ['restore.js', file, ...args], { cwd: __dirname, env: { ...process.env, DATA_DIR: into, MONGODB_URI: '' }, encoding: 'utf8' });
+      assert.deepEqual([run().status, fs.existsSync(path.join(into, 'gyms.json'))], [1, false]);
+      const done = run('--yes');
+      assert.deepEqual([done.status, JSON.parse(fs.readFileSync(path.join(into, 'gyms.json'), 'utf8')).length, JSON.parse(fs.readFileSync(path.join(into, 'customers.json'), 'utf8')).length], [0, all.gyms.length, all.customers.length], done.stderr);
+      fs.rmSync(into, { recursive: true, force: true });
+    }
 
     // Passwords: the gym changes its own; the owner resets one and switches a gym off
     assert.equal(await status(gym('POST', '/api/auth/password', { current: 'wrong-one', password: 'second-password' })), 400);
@@ -267,13 +303,26 @@ async function apiChecks() {
     assert.deepEqual([await status(gym('GET', '/api/data')), await status(browser()('POST', '/api/auth/login', { email: 'fit.zone', password: 'first-password' }))], [200, 401]);
     await ok(owner('PUT', `/api/admin/gyms/${seen.id}`, { disabled: true }));
     assert.deepEqual([await status(gym('GET', '/api/data')), await status(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'second-password' }))], [401, 403]);
-    // Deleting a member takes their periods and payments along; the owner signs out
+    // A deleted member leaves every screen and every total, and nothing can be done to them
     await ok(owner('DELETE', `/api/members/${rahul.id}?gym=${seen.id}`));
-    assert.deepEqual([(await db.find('memberships', { customerId: rahul.id })).length, (await db.find('transactions', { customerId: rahul.id })).length, (await db.find('memberships', { gymId: seen.id })).length], [0, 0, 2]);
+    data = await ok(owner('GET', `/api/data?gym=${seen.id}`));
+    assert.deepEqual([data.members.some((m) => m.id === rahul.id), data.payments.some((p) => p.memberId === rahul.id), data.deleted.map((d) => d.name),
+      await status(owner('POST', `/api/members/${rahul.id}/pay?gym=${seen.id}`, { amount: 1 }))], [false, false, ['Rahul Sharma'], 404]);
+    // They come back with every period and payment, unless their mobile number has gone to someone else meanwhile
+    const twin = await ok(owner('POST', `/api/members?gym=${seen.id}`, { name: 'Twin', phone: '9829011111', months: 1 }));
+    assert.equal(await status(owner('POST', `/api/members/${rahul.id}/restore?gym=${seen.id}`)), 409);
+    await ok(owner('DELETE', `/api/members/${twin.id}?gym=${seen.id}`));
+    const again = await ok(owner('POST', `/api/members/${rahul.id}/restore?gym=${seen.id}`));
+    assert.deepEqual([again.fee, again.paid, again.months, (await ok(owner('GET', `/api/data?gym=${seen.id}`))).deleted.map((d) => d.name)], [8700, 5000, 3, ['Twin']]);
+    // After thirty days what is still deleted goes for good: a member with their periods, a gym with all it held
+    await ok(owner('DELETE', `/api/admin/gyms/${third}`));
+    await daily(new Date(Date.now() + 31 * 864e5));
+    assert.deepEqual([(await db.find('customers', { _id: twin.id })).length, (await db.find('memberships', { customerId: twin.id })).length, (await db.find('customers', { _id: rahul.id })).length,
+      (await db.find('gyms', { _id: third })).length, (await db.find('customers', { gymId: third })).length, (await db.find('backups', { gymId: third })).length], [0, 0, 1, 0, 0, 0]);
     await ok(owner('POST', '/api/auth/logout'));
     assert.equal(await status(owner('GET', '/api/admin/gyms')), 401);
     // One file per collection, and a write without the JSON content type is refused
-    if (!MONGO) assert.deepEqual(fs.readdirSync(dir).sort(), ['customers.json', 'gyms.json', 'memberships.json', 'sessions.json', 'transactions.json']);
+    if (!MONGO) assert.deepEqual(fs.readdirSync(dir).sort(), ['backups.json', 'customers.json', 'gyms.json', 'memberships.json', 'sessions.json', 'transactions.json']);
     const plain = await fetch(`http://127.0.0.1:${srv.address().port}/api/auth/login`, { method: 'POST', body: '{}' });
     assert.equal(plain.status, 415);
   } finally {

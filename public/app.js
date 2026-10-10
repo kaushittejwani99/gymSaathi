@@ -47,9 +47,20 @@ const fd = (form) => Object.fromEntries(new FormData(form));
 const notFound = `<div class="card">${empty('Nothing here', 'This record does not exist any more.', '<a class="btn primary" href="#/dashboard">Go to dashboard</a>')}</div>`;
 
 // Asks before something is deleted. `action` runs on Yes, with `id` on the button.
-const sure = (title, text, action, id, yes) => openDialog(`<div class="dialog-body"><h2>${esc(title)}</h2><p class="muted">${esc(text)} This cannot be undone.</p></div>
+const sure = (title, text, action, id, yes) => openDialog(`<div class="dialog-body"><h2>${esc(title)}</h2><p class="muted">${esc(text)}</p></div>
   <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button><button class="btn danger" data-action="${action}" data-id="${esc(id)}">${esc(yes)}</button></footer>`);
 const payDel = (p) => `<button class="btn ghost icon" data-action="payment-edit" data-id="${esc(p.id)}" aria-label="Change payment">${icon('edit')}</button><button class="btn ghost icon" data-action="payment-delete" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-amount="${money(p.amount)}" aria-label="Delete payment">${icon('trash')}</button>`;
+
+// Saves a table as a .csv file, which Excel opens. A cell that starts like a formula is written as plain text.
+function saveTable(name, rows) {
+  const cell = (v) => { const t = String(v == null ? '' : v); return `"${(/^[=+\-@]/.test(t) ? `'${t}` : t).replace(/"/g, '""')}"`; };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + rows.map((r) => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+  a.download = `${S.gym.name.replace(/[^\w]+/g, '-')}-${name}-${today()}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const yes = (v) => (v ? 'Yes' : 'No');
 
 const STATUS = { active: ['paid', 'Active'], expiring: ['partial', 'Ending soon'], expired: ['overdue', 'Ended'] };
 const pill = (m) => { const [cls, label] = STATUS[G.statusOf(m, today())]; return `<span class="pill ${cls}">${label}</span>`; };
@@ -244,7 +255,15 @@ views.dashboard = () => {
 // ---- members
 
 const TABS = [['', 'All'], ['active', 'Active'], ['expiring', 'Ending soon'], ['expired', 'Ended'], ['due', 'Fees pending'], ['paid', 'Fees paid']];
+// Deleted members wait here for 30 days, then they are gone for good.
+function deletedRows() {
+  if (!S.deleted.length) return empty('Nothing deleted', 'A deleted member waits here for 30 days and can be brought back.');
+  return table(['Member', 'Deleted on', 'Gone for good on', ''], S.deleted.map((d) => { const on = G.todayISO(new Date(d.deletedAt)); return `<tr>
+    <td>${esc(d.name)}<br><span class="muted">${esc(d.phone)}</span></td><td>${esc(G.fmtDate(on))}</td><td>${esc(G.fmtDate(G.addDays(on, 30)))}</td>
+    <td class="num"><button class="btn secondary" data-action="member-restore" data-id="${esc(d.id)}">Bring back</button></td></tr>`; }));
+}
 function memberRows() {
+  if (F.tab === 'deleted') return deletedRows();
   const q = F.q.trim().toLowerCase(), t = today();
   const rows = S.members.filter((m) => (!F.tab || (F.tab === 'due' ? G.due(m) > 0 : F.tab === 'paid' ? !G.due(m) : G.statusOf(m, t) === F.tab)) && (!q || `${m.name} ${m.phone}`.toLowerCase().includes(q)))
     .sort((a, b) => (a.end > b.end) - (a.end < b.end));
@@ -280,8 +299,9 @@ const memberBody = (form) => ({ ...fd(form), ...(form.pt && { pt: form.pt.checke
 
 views.members = (id) => {
   if (!id) {
-    return page('Members', `<button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
-      <div class="card"><div class="tabs">${TABS.map(([v, label]) => `<button class="tab" data-action="tab" data-value="${v}" ${F.tab === v ? 'aria-pressed="true"' : ''}>${label}</button>`).join('')}</div>
+    const tabs = S.deleted.length || F.tab === 'deleted' ? [...TABS, ['deleted', `Deleted (${S.deleted.length})`]] : TABS;
+    return page('Members', `<button class="btn secondary" data-action="export-members">Download Excel</button><button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
+      <div class="card"><div class="tabs">${tabs.map(([v, label]) => `<button class="tab" data-action="tab" data-value="${v}" ${F.tab === v ? 'aria-pressed="true"' : ''}>${label}</button>`).join('')}</div>
         <div class="filters"><input type="search" data-action="search" value="${esc(F.q)}" placeholder="Search name or mobile number" aria-label="Search members"></div>
         <div id="list">${memberRows()}</div></div>`);
   }
@@ -349,26 +369,37 @@ Object.assign(actions, {
   },
   async 'period-edit-save'(form) { await api('PUT', `/api/members/${form.dataset.id}/period`, memberBody(form)); dlg.close(); toast('Membership corrected'); await load(); },
   'payment-delete'(el) {
-    sure(`Delete this payment of ${el.dataset.amount}?`, `${el.dataset.name} will owe this amount again. Use this for a payment typed in by mistake.`, 'payment-delete-yes', el.dataset.id, 'Delete payment');
+    sure(`Delete this payment of ${el.dataset.amount}?`, `${el.dataset.name} will owe this amount again. Use this for a payment typed in by mistake. This cannot be undone.`, 'payment-delete-yes', el.dataset.id, 'Delete payment');
   },
   async 'payment-delete-yes'(el) { await api('DELETE', `/api/payments/${el.dataset.id}`); dlg.close(); toast('Payment deleted'); await load(); },
   'period-delete'(el) {
-    sure(`Undo ${el.dataset.name}'s last renewal?`, 'The newest membership is removed and the one before it runs again. Use this for a renewal made by mistake.', 'period-delete-yes', el.dataset.id, 'Undo renewal');
+    sure(`Undo ${el.dataset.name}'s last renewal?`, 'The newest membership is removed and the one before it runs again. Use this for a renewal made by mistake. This cannot be undone.', 'period-delete-yes', el.dataset.id, 'Undo renewal');
   },
   async 'period-delete-yes'(el) { await api('DELETE', `/api/members/${el.dataset.id}/period`); dlg.close(); toast('Renewal undone'); await load(); },
   'sample-clear'() {
-    sure('Remove the sample members?', 'Every sample member goes, with their memberships and payments. Members you added yourself stay.', 'sample-clear-yes', '', 'Remove sample members');
+    sure('Remove the sample members?', 'Every sample member goes, with their memberships and payments. Members you added yourself stay. This cannot be undone.', 'sample-clear-yes', '', 'Remove sample members');
   },
   async 'sample-clear-yes'() { const r = await api('DELETE', '/api/sample'); dlg.close(); toast(`${r.removed} sample members removed`); await load(); },
+  async 'member-restore'(el) { const m = await api('POST', `/api/members/${el.dataset.id}/restore`); toast(`${m.name} is back`); await refresh(); F.tab = S.deleted.length ? 'deleted' : ''; route(); },
+  'export-members'() {
+    const t = today();
+    saveTable('members', [['Name', 'Mobile', 'Gender', 'Age', 'Weight (kg)', 'Height', 'Goal', 'Health', 'Batch', 'Joined', 'Months', 'Starts', 'Ends', 'Personal trainer', 'Diet plan', 'Fee', 'Paid', 'Pending', 'Status', 'Notes'],
+      ...S.members.map((m) => [m.name, m.phone, m.gender, m.age, m.weight, m.height, m.goal, m.health, m.batch, m.joinedAt, m.months, m.start, m.end, yes(m.pt), yes(m.diet), m.fee, m.paid, G.due(m), STATUS[G.statusOf(m, t)][1], m.notes])]);
+  },
+  'export-payments'() {
+    const phone = Object.fromEntries(S.members.map((m) => [m.id, m.phone]));
+    saveTable(`payments${F.month ? `-${F.month}` : ''}`, [['Date', 'Member', 'Mobile', 'Paid by', 'Amount'],
+      ...S.payments.filter((p) => !F.month || p.date.startsWith(F.month)).sort((a, b) => (a.date < b.date) - (a.date > b.date)).map((p) => [p.date, p.name, phone[p.memberId] || '', p.mode, p.amount])]);
+  },
   'member-delete'(el) {
-    openDialog(`<div class="dialog-body"><h2>Delete ${esc(el.dataset.name)}?</h2><p class="muted">The member and their payments are removed. This cannot be undone.</p></div>
+    openDialog(`<div class="dialog-body"><h2>Delete ${esc(el.dataset.name)}?</h2><p class="muted">The member leaves every list and total, with their payments. For 30 days you can bring them back from Members, under Deleted; after that they are gone for good.</p></div>
       <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button>
         <button class="btn danger" data-action="member-delete-yes" data-id="${esc(el.dataset.id)}">Delete</button></footer>`);
   },
   async 'member-delete-yes'(el) {
     await api('DELETE', `/api/members/${el.dataset.id}`);
     dlg.close();
-    toast('Member deleted');
+    toast('Member deleted. Bring them back from the Deleted tab within 30 days.');
     await refresh();
     go('#/members');
   },
@@ -417,7 +448,7 @@ function paymentRows() {
 }
 views.payments = () => {
   const owe = S.members.filter((m) => G.due(m) > 0), owed = owe.reduce((s, m) => s + G.due(m), 0);
-  return page('Payments', '', `
+  return page('Payments', '<button class="btn secondary" data-action="export-payments">Download Excel</button>', `
     <div class="card"><div class="filters"><label class="field"><span>Month (empty shows all)</span><input type="month" data-action="pay-month" value="${esc(F.month)}"></label></div>
       <div id="list">${paymentRows()}</div></div>
     <p class="hint">${owe.length ? `${money(owed)} is still pending from ${owe.length} member${owe.length > 1 ? 's' : ''}: <a href="#/members" data-action="tab" data-value="due">see who</a>.` : 'No fees are pending.'}</p>`);
@@ -638,10 +669,11 @@ views.accounts = () => {
     loadAccounts().catch((err) => toast(err.message, true));
     return page('Accounts', '', `<div class="card">${empty('Loading gyms', 'One moment.')}</div>`);
   }
-  const add = `<button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
+  const add = `<a class="btn secondary" href="/api/admin/backup" download>Download backup</a><button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
+  const gone = accounts.filter((a) => a.deletedAt), shown = accounts.filter((a) => !a.deletedAt);
   if (!accounts.length) return page('Accounts', add, `<div class="card">${empty('No gym yet', 'Add a gym and give it its username and password. Its free month starts when it first signs in.', add)}</div>`);
   return page('Accounts', add, `
-    <div class="card">${table(['Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], accounts.map((a) => `<tr>
+    <div class="card">${table(['Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], shown.map((a) => `<tr>
       <td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: <strong>${esc(a.email)}</strong>${a.owner || a.phone ? `<br>${esc([a.owner, a.phone].filter(Boolean).join(' · '))}` : ''}</span></td>
       <td class="num">${a.members}</td><td class="num ${a.due > 0 ? 'low' : ''}">${money(a.due)}</td><td class="num">${money(a.collected)}</td>
       <td>${esc(when(a.firstLoginAt)) || '<span class="muted">Never</span>'}${a.lastLoginAt && a.lastLoginAt !== a.firstLoginAt ? `<br><span class="muted">last ${esc(when(a.lastLoginAt))}</span>` : ''}</td>
@@ -654,9 +686,14 @@ views.accounts = () => {
         <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="12">+1 year</button>
         <button class="btn secondary" data-action="account-password" data-id="${esc(a.id)}" data-name="${esc(a.email)}" data-gym="${esc(a.gym)}">Username, password</button>
         <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button>
+        <button class="btn secondary" data-action="account-backups" data-id="${esc(a.id)}" data-name="${esc(a.gym)}">Backups</button>
         <button class="btn danger" data-action="account-delete" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-members="${a.members}">Delete</button></div></td></tr>`))}</div>
     <p class="hint">A gym's free month starts at its first sign-in. When its time is over it is signed out and told to pay; press <strong>Paid</strong> when it has, and it can sign in again.
-      <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them. <strong>Edit details</strong> opens its name, owner, address, amenities and prices.</p>`);
+      <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them. <strong>Edit details</strong> opens its name, owner, address, amenities and prices.
+      Every gym is backed up once a day and the last ${S.backupDays} days are kept: <strong>Backups</strong> puts a gym back to one of them. <strong>Download backup</strong> saves everything in one file; keep a copy outside this site.</p>
+    ${gone.length ? `<section class="card"><div class="card-head"><h2>Deleted gyms</h2><span class="hint">Kept for 30 days, then gone for good.</span></div>
+      ${table(['Gym', '#Members', 'Deleted on', ''], gone.map((a) => `<tr><td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: ${esc(a.email)}</span></td><td class="num">${a.members}</td>
+        <td>${esc(when(a.deletedAt))}</td><td class="num"><button class="btn secondary" data-action="account-restore" data-id="${esc(a.id)}">Bring back</button></td></tr>`))}</section>` : ''}`);
 };
 Object.assign(actions, {
   'account-new'() {
@@ -685,9 +722,24 @@ Object.assign(actions, {
   },
   async 'account-password-save'(form) { await api('PUT', `/api/admin/gyms/${form.dataset.id}`, fd(form)); dlg.close(); toast('Login saved. That gym is signed out everywhere.'); await loadAccounts(); },
   'account-delete'(el) {
-    sure(`Delete ${el.dataset.name}?`, `The gym, its login, its ${el.dataset.members} members and all their memberships and payments are removed for good. To only stop it signing in, use Switch off.`, 'account-delete-yes', el.dataset.id, 'Delete gym');
+    sure(`Delete ${el.dataset.name}?`, `The gym, its login, its ${el.dataset.members} members and all their memberships and payments leave at once and it is signed out. For 30 days you can bring it back from Deleted gyms on this page; after that it is gone for good. To only stop it signing in, use Switch off.`, 'account-delete-yes', el.dataset.id, 'Delete gym');
   },
-  async 'account-delete-yes'(el) { await api('DELETE', `/api/admin/gyms/${el.dataset.id}`); dlg.close(); toast('Gym deleted'); await loadAccounts(); },
+  async 'account-delete-yes'(el) { await api('DELETE', `/api/admin/gyms/${el.dataset.id}`); dlg.close(); toast('Gym deleted. It can be brought back for 30 days.'); await loadAccounts(); },
+  async 'account-restore'(el) { await api('POST', `/api/admin/gyms/${el.dataset.id}/restore`); toast('The gym is back'); await loadAccounts(); },
+  async 'account-backups'(el) {
+    const kept = await api('GET', `/api/admin/gyms/${el.dataset.id}/backups`);
+    openDialog(`<header class="dialog-head"><h2>Backups of ${esc(el.dataset.name)}</h2><button type="button" class="btn ghost icon" data-action="dialog-close" aria-label="Close">${icon('x')}</button></header>
+      <div class="dialog-body"><p class="muted">Putting a gym back replaces its members, memberships and payments with what it had on that day. What it has now is kept as "before restore", so this can be taken back.</p>
+      ${kept.length ? table(['Day', '#Members', ''], kept.map((b) => `<tr><td>${b.date === 'before restore' ? 'Before the last restore' : esc(G.fmtDate(b.date))}<br><span class="muted">${esc(when(b.at))}</span></td><td class="num">${b.members}</td>
+        <td class="num"><button class="btn secondary" data-action="account-backup-restore" data-id="${esc(el.dataset.id)}" data-date="${esc(b.date)}">Put back</button></td></tr>`))
+      : empty('No backup yet', 'The first one is made within a day of the gym being added.')}</div>`);
+  },
+  async 'account-backup-restore'(el) {
+    const r = await api('POST', `/api/admin/gyms/${el.dataset.id}/backups`, { date: el.dataset.date });
+    dlg.close();
+    toast(`Put back: ${r.members} members`);
+    await loadAccounts();
+  },
   async 'account-toggle'(el) { await api('PUT', `/api/admin/gyms/${el.dataset.id}`, { disabled: !!el.dataset.off }); toast(el.dataset.off ? 'Gym switched off' : 'Gym switched on'); await loadAccounts(); },
 });
 
