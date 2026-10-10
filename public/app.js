@@ -130,7 +130,6 @@ function route() {
   $('#gymName').textContent = S.gym ? S.gym.name : 'All gyms';
   $('#planNote').textContent = S.gym && S.validTill ? `${S.paying ? 'Plan' : 'Free trial'} till ${G.fmtDate(G.todayISO(new Date(S.validTill)))}` : '';
   $('#viewClose').hidden = !view;
-  $('#signOut').hidden = !S.user.admin; // a gym stays signed in until its time is over
   document.title = `${{ bolo: 'Assistant', import: 'Import old members' }[name] || cap(name)} - GymSaathi`;
   if (name === 'bolo') renderTalk();
   return undefined;
