@@ -14,7 +14,7 @@ const db = require('./lib/db');
 const ai = require('./lib/ai');
 
 const MAX_BODY = 256 * 1024;
-const TRIAL_MONTHS = 1, PRICE = 500; // a gym's first month from its first sign-in is free; after that it pays PRICE a month
+const TRIAL_MONTHS = 1, PRICE = 999; // a gym's first month from its first sign-in is free; after that it pays PRICE a month
 const OWNER_DAYS = 30;               // how long the owner of the service stays signed in
 const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'";
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };

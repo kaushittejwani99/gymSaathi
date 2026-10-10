@@ -15,7 +15,7 @@ It costs nothing to run: free hosting, a free database and a free AI key are eno
 - **Payments.** One tap for "got the full amount in cash" or by UPI, or enter a part payment. Renew a membership in one tap.
 - **Membership history.** Every period a member buys is saved as its own record and never changed: 1 month now and 3 months later are two records. Every payment is its own record too.
 - **One login per gym.** You (the service owner) create a login for each gym on the Accounts page. A gym sees only its own members.
-- **First month free, then ₹500 a month.** A gym's free month starts the moment it first signs in. It stays signed in (there is no sign-out button) until that time is over. Then it is signed out on every device and sees: *Your free trial is over. Pay ₹500 to start the service again.* In its last five days the dashboard warns it. When it pays, press **Paid: +1 month** (or **+1 year**) on the Accounts page and it can sign in again.
+- **First month free, then ₹999 a month.** A gym's free month starts the moment it first signs in. It stays signed in (there is no sign-out button) until that time is over. Then it is signed out on every device and sees: *Your free trial is over. Pay ₹999 to start the service again.* In its last five days the dashboard warns it. When it pays, press **Paid: +1 month** (or **+1 year**) on the Accounts page and it can sign in again.
 - **You see every gym.** The Accounts page shows each gym's members, fees pending, money collected, first and last sign-in and the day its time ends. **Open** shows a gym exactly as the gym sees it. **Ask on WhatsApp** sends the gym a payment reminder.
 
 ## Try it on your computer
@@ -74,7 +74,7 @@ Without `MONGODB_URI` the same five are JSON files in `DATA_DIR`.
    | `ADMIN_EMAIL` | your owner login |
    | `ADMIN_PASSWORD` | a long password |
    | `MONGODB_URI` | the Atlas connection string, with your database user's password in place of `<db_password>` |
-   | `PAY_NOTE` | where a gym sends its ₹500, for example `UPI yourname@bank, or call 98290 00000` |
+   | `PAY_NOTE` | where a gym sends its ₹999, for example `UPI yourname@bank, or call 98290 00000` |
    | `GEMINI_API_KEY` | the Google key |
    | `COOKIE_SECURE` | `1` |
    | `TRUST_PROXY` | `1` |

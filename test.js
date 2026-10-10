@@ -159,10 +159,10 @@ async function apiChecks() {
     const second = await listed('second.gym'), past = '2020-01-01T00:00:00.000Z';
     await db.update('gyms', { _id: second.id }, { validTill: past });
     let [code, body] = await other('GET', '/api/data');
-    assert.deepEqual([code, body.error], [402, 'Your free trial is over. Pay ₹500 to start the service again.']);
+    assert.deepEqual([code, body.error], [402, 'Your free trial is over. Pay ₹999 to start the service again.']);
     assert.equal(await status(other('GET', '/api/data')), 401);
     [code, body] = await other('POST', '/api/auth/login', { email: 'second.gym', password: 'first-password' });
-    assert.deepEqual([code, body.error], [402, 'Your free trial is over. Pay ₹500 to start the service again.']);
+    assert.deepEqual([code, body.error], [402, 'Your free trial is over. Pay ₹999 to start the service again.']);
     // The owner marks it paid: one month from now, and the gym signs in again. The first sign-in stays as it was
     const till = (await ok(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 1 }))).validTill;
     assert.equal(till.slice(0, 10), G.addMonths(new Date().toISOString().slice(0, 10), 1));
@@ -171,7 +171,7 @@ async function apiChecks() {
     // Paying early adds to the time left; and once a paid month is over the message says plan, not trial
     assert.equal((await ok(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 12 }))).validTill, G.addMonths(till.slice(0, 10), 12) + till.slice(10));
     await db.update('gyms', { _id: second.id }, { validTill: past });
-    assert.equal((await other('GET', '/api/data'))[1].error, 'Your plan is over. Pay ₹500 to start the service again.');
+    assert.equal((await other('GET', '/api/data'))[1].error, 'Your plan is over. Pay ₹999 to start the service again.');
     assert.equal(await status(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 5 })), 400);
 
     // Passwords: the gym changes its own; the owner resets one and switches a gym off
