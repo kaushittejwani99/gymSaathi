@@ -149,6 +149,7 @@ function route() {
   $('#viewClose').hidden = !view;
   document.title = `${{ bolo: 'Assistant', import: 'Import old members' }[name] || cap(name)} - GymSaathi`;
   if (name === 'bolo') renderTalk();
+  weeklyBackup().catch((e) => toast(e.message, true));
   return undefined;
 }
 const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
@@ -708,6 +709,103 @@ Object.assign(actions, {
   'bolo-ask'(el) { return heard(el.textContent); },
 });
 
+// ---- a backup on this computer, every seven days
+
+// A site cannot put a file on a computer by itself, nor learn the path a download went to. So: when a backup is due a
+// box asks for it and will not go away until it is saved. In Chrome and Edge a folder can be chosen once; after that
+// each week's file is written there without asking. What is noted on the server is when, which file, the folder's
+// name (or 'Downloads folder') and the device.
+let backupBusy = false, backupBox = false;
+const me = () => (S.user.admin ? 'owner' : S.user.id);
+// The browser's own small store on this computer: it remembers the folder that was chosen.
+function kept(mode, run) {
+  return new Promise((done, fail) => {
+    const open = indexedDB.open('gymsaathi', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('kept');
+    open.onerror = () => fail(open.error);
+    open.onsuccess = () => { const tx = open.result.transaction('kept', mode), asked = run(tx.objectStore('kept')); tx.oncomplete = () => done(asked.result); tx.onerror = () => fail(tx.error); };
+  });
+}
+function keptFolder() { return window.showDirectoryPicker ? kept('readonly', (store) => store.get(`folder:${me()}`)).catch(() => undefined) : Promise.resolve(undefined); }
+function deviceName() {
+  const ua = navigator.userAgent, browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'browser';
+  return `${browser} on ${(navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || 'this device'}`;
+}
+// The file itself: a gym's own records, or for the owner of the service every gym's.
+async function backupFile() {
+  if (S.user.admin) {
+    const res = await fetch('/api/admin/backup').catch(() => null);
+    if (!res || !res.ok) throw new Error('The backup could not be made. Try again.');
+    return { name: `gymsaathi-all-gyms-${today()}.json.gz`, blob: await res.blob() };
+  }
+  return { name: `${S.gym.name.replace(/[^\w]+/g, '-')}-backup-${today()}.json`, blob: new Blob([JSON.stringify(await api('GET', '/api/backup'), null, 1)], { type: 'application/json' }) };
+}
+// Saves a backup and notes it. Into the chosen folder when there is one and the browser allows it; else, when `ask`
+// is set (somebody pressed a button), as an ordinary download. Says where it went, or '' when nothing could be saved
+// without asking.
+async function saveBackup(ask) {
+  const folder = await keptFolder();
+  let into = null;
+  if (folder && (await folder.queryPermission({ mode: 'readwrite' }) === 'granted' || (ask && await folder.requestPermission({ mode: 'readwrite' }) === 'granted'))) into = folder;
+  if (!into && !ask) return '';
+  const { name, blob } = await backupFile();
+  let place = 'Downloads folder';
+  if (into) {
+    const writer = await (await into.getFileHandle(name, { create: true })).createWritable();
+    await writer.write(blob);
+    await writer.close();
+    place = `Folder "${into.name}"`;
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  Object.assign(S, await api('POST', '/api/exports', { file: name, place, device: deviceName() }));
+  return place;
+}
+const lastSaved = () => (S.exports.length ? `Last saved ${when(S.exports[0].at)}, in ${S.exports[0].place}, from ${S.exports[0].device || 'a device'}.` : 'No backup has been saved yet.');
+const backupButtons = (folder) => `<button class="btn primary" data-action="export-now">${folder ? `Save in the folder "${esc(folder.name)}"` : 'Download backup'}</button>
+  ${window.showDirectoryPicker ? `<button class="btn secondary" data-action="export-folder">${folder ? 'Choose another folder' : 'Choose a folder for backups'}</button>` : ''}`;
+// Called whenever a page is drawn. Does nothing unless a backup is due.
+async function weeklyBackup() {
+  if (!S || !S.exportDue || backupBusy || (backupBox && dlg.open)) return;
+  backupBusy = true;
+  try {
+    const place = await saveBackup(false).catch(() => '');
+    if (place) return toast(`This week's backup is saved: ${place}`);
+    const folder = await keptFolder();
+    backupBox = true;
+    return openDialog(`<div class="dialog-body"><h2>Save this week's backup on this computer</h2>
+      <p class="muted">Every ${S.exportDays} days a copy of ${S.user.admin ? "every gym's data" : "your gym's members, memberships and payments"} is saved on your own computer, so nothing is lost if the internet or this site ever fails. ${esc(lastSaved())}</p>
+      ${window.showDirectoryPicker ? '<p class="hint">Choose a folder once and later backups are saved there by themselves.</p>' : ''}</div>
+      <footer class="dialog-foot">${backupButtons(folder)}</footer>`);
+  } finally { backupBusy = false; }
+}
+function backupDone(place) {
+  backupBox = false;
+  if (dlg.open) dlg.close();
+  toast(`Backup saved: ${place}`);
+  route();
+}
+// The box stays until the backup is saved: Esc does not close it, and leaving the page brings it back.
+dlg.addEventListener('cancel', (e) => { if (backupBox) e.preventDefault(); });
+dlg.addEventListener('close', () => { if (!dlg.open) backupBox = false; }); // a close that the box has already come back from does not count
+Object.assign(actions, {
+  async 'export-now'() { backupDone(await saveBackup(true)); },
+  async 'export-folder'() {
+    const folder = await window.showDirectoryPicker({ id: 'gymsaathi-backups', mode: 'readwrite' }).catch((e) => { if (e.name === 'AbortError') return null; throw e; });
+    if (!folder) return;
+    await kept('readwrite', (store) => store.put(folder, `folder:${me()}`));
+    backupDone(await saveBackup(true));
+  },
+});
+// The card on Settings (a gym) and on Accounts (the owner of the service).
+const backupCard = () => `<section class="card"><div class="card-head"><h2>Backup on this computer</h2><span class="hint">Asked for every ${S.exportDays} days</span></div>
+  <div class="card-body"><p class="muted">${esc(lastSaved())}</p><div class="actions"><button class="btn secondary" data-action="export-now">Save a backup now</button>
+    ${window.showDirectoryPicker ? '<button class="btn secondary" data-action="export-folder">Choose a folder for backups</button>' : ''}</div></div></section>`;
+
 // ---- settings
 
 // The gym's details and prices: on its Settings page, and in the form the owner of the service fills to add a gym,
@@ -732,6 +830,7 @@ views.settings = () => {
         <div class="card-body grid three">${gymPrices(g)}</div></section>
       <div class="form-foot"><button class="btn primary">Save settings</button></div>
     </form>
+    ${view ? '' : backupCard()}
     ${view ? '' : `<section class="card"><div class="card-head"><h2>Account</h2><span class="hint">Signed in as ${esc(S.user.email)}</span></div>
       <div class="card-body actions"><button class="btn secondary" data-action="password-edit">Change password</button></div></section>`}`);
 };
@@ -768,7 +867,7 @@ views.accounts = () => {
     loadAccounts().catch((err) => toast(err.message, true));
     return page('Accounts', '', `<div class="card">${empty('Loading gyms', 'One moment.')}</div>`);
   }
-  const add = `<a class="btn secondary" href="/api/admin/backup" download>Download backup</a><button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
+  const add = `<button class="btn secondary" data-action="export-now">Download backup</button><button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
   const gone = accounts.filter((a) => a.deletedAt), shown = accounts.filter((a) => !a.deletedAt);
   if (!accounts.length) return page('Accounts', add, `<div class="card">${empty('No gym yet', 'Add a gym and give it its username and password. Its free month starts when it first signs in.', add)}</div>`);
   // All gyms added up. A gym's own Members page only ever shows that one gym.
@@ -777,7 +876,8 @@ views.accounts = () => {
     <div class="kpis">${card('Gyms', shown.length, `${shown.filter((g) => g.firstLoginAt && !g.disabled && new Date(g.validTill) > new Date()).length} running now`)}${card('Members in all gyms', all('members').toLocaleString('en-IN'), 'open a gym to see its own')}
       ${card('Fees pending in all gyms', money(all('due')), 'owed to the gyms by their members')}${card('Collected by all gyms', money(all('collected')), 'since each gym began')}</div>
     <div class="card">${bulkBar()}${table([PICK_ALL, 'Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], shown.map((a) => `<tr>
-      ${pickBox(a.id, a.gym)}<td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: <strong>${esc(a.email)}</strong>${a.owner || a.phone ? `<br>${esc([a.owner, a.phone].filter(Boolean).join(' · '))}` : ''}</span></td>
+      ${pickBox(a.id, a.gym)}<td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: <strong>${esc(a.email)}</strong>${a.owner || a.phone ? `<br>${esc([a.owner, a.phone].filter(Boolean).join(' · '))}` : ''}
+        <br>${a.savedAt ? `Own backup: ${esc(when(a.savedAt))}, ${esc(a.savedPlace)}${a.savedDevice ? `, ${esc(a.savedDevice)}` : ''}` : 'Own backup: never'}</span></td>
       <td class="num">${a.members}</td><td class="num ${a.due > 0 ? 'low' : ''}">${money(a.due)}</td><td class="num">${money(a.collected)}</td>
       <td>${esc(when(a.firstLoginAt)) || '<span class="muted">Never</span>'}${a.lastLoginAt && a.lastLoginAt !== a.firstLoginAt ? `<br><span class="muted">last ${esc(when(a.lastLoginAt))}</span>` : ''}</td>
       <td>${planPill(a)}${a.validTill ? `<br><span class="muted">${esc(when(a.validTill))}</span>` : ''}</td>
@@ -794,6 +894,7 @@ views.accounts = () => {
     <p class="hint">A gym's free month starts at its first sign-in. When its time is over it is signed out and told to pay; press <strong>Paid</strong> when it has, and it can sign in again.
       <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them. <strong>Edit details</strong> opens its name, owner, address, amenities and prices.
       Every gym is backed up once a day and the last ${S.backupDays} days are kept: <strong>Backups</strong> puts a gym back to one of them. <strong>Download backup</strong> saves everything in one file; keep a copy outside this site.</p>
+    ${view ? '' : backupCard()}
     ${gone.length ? `<section class="card"><div class="card-head"><h2>Deleted gyms</h2><span class="hint">Kept for 30 days, then gone for good.</span></div>
       ${table(['Gym', '#Members', 'Deleted on', ''], gone.map((a) => `<tr><td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: ${esc(a.email)}</span></td><td class="num">${a.members}</td>
         <td>${esc(when(a.deletedAt))}</td><td class="num"><button class="btn secondary" data-action="account-restore" data-id="${esc(a.id)}">Bring back</button></td></tr>`))}</section>` : ''}`);

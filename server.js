@@ -18,6 +18,7 @@ const wa = require('./lib/whatsapp');
 
 const MAX_BODY = 256 * 1024;
 const MAX_FILE = 12 * 1024 * 1024; // a photo or a PDF of old records, sent once to be read
+const EXPORT_DAYS = 7;              // every gym, and the owner of the service, saves a backup on their own computer this often
 const KEEP_DELETED_DAYS = 30;       // a deleted member or gym can be brought back for this long, then it goes for good
 const BACKUP_DAYS = Number(process.env.BACKUP_DAYS) || 7; // how many daily backups of each gym are kept
 const CACHE_SECONDS = 300;           // how long a gym's records are kept in the cache when nothing changes them
@@ -176,7 +177,7 @@ async function purgeMember(gymId, id) {
   await cache.drop(`records:${gymId}`);
 }
 async function purgeGym(id) {
-  for (const name of ['sessions', 'backups', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
+  for (const name of ['sessions', 'backups', 'exports', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
   await db.remove('gyms', { _id: id });
   await cache.drop(`records:${id}`);
 }
@@ -327,17 +328,40 @@ const open = {
   },
 };
 
+// ---- a backup on one's own computer
+
+// A browser never tells a site the path a file was saved to. What is noted is what can be known: the day and time,
+// the file's name, the folder's name when the person chose a folder for backups (else 'Downloads folder'), and the device.
+// The owner of the service saves under 'owner', also while a gym is open; a gym saves under its own id.
+const saver = (c) => (c.admin ? 'owner' : c.gymId);
+async function exportsOf(who, hasData) {
+  const kept = (await db.find('exports', { gymId: who })).sort((a, b) => (a.at < b.at) - (a.at > b.at));
+  const due = hasData && (!kept.length || Date.now() - Date.parse(kept[0].at) > EXPORT_DAYS * 864e5);
+  return { exports: kept.slice(0, 5).map(({ at, file, place, device }) => ({ at, file, place, device })), exportDue: due, exportDays: EXPORT_DAYS };
+}
+
 // For a gym, and for the owner of the service with or without a gym opened.
 const either = {
+  'POST /api/exports': async (c) => {
+    await db.insert('exports', { _id: newId(), gymId: saver(c), at: stamp(), file: required(c.body.file, 'The file name', 150), place: G.str(c.body.place, 150) || 'Downloads folder', device: G.str(c.body.device, 100) });
+    return exportsOf(saver(c), true);
+  },
   'GET /api/data': async ({ admin, account }) => {
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
-    if (!account) return { user, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, aiEnabled: ai.aiEnabled() };
-    const data = await loadGym(account);
-    return { user, ...data, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
+    // A backup is asked for only where there is something to keep: a gym for the owner, a member for a gym.
+    const data = account && await loadGym(account);
+    const saved = await exportsOf(admin ? 'owner' : account._id, admin ? (await db.find('gyms', {}, ['deletedAt'])).some(live) : data.members.length > 0);
+    if (!account) return { user, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, ...saved, aiEnabled: ai.aiEnabled() };
+    return { user, ...data, ...saved, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
 };
 
 const gymRoutes = {
+  // Everything of this gym as it is kept, for a file on the gym's own computer.
+  'GET /api/backup': async ({ account, gymId }) => {
+    const [customers, memberships, transactions] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId })));
+    return { madeAt: stamp(), gym: account.details, customers, memberships, transactions };
+  },
   'POST /api/auth/password': async ({ body, account, gymId, req }) => {
     if (typeof body.current !== 'string' || !same(hashed(body.current, account.salt).hash, account.hash)) fail(400, 'The current password is not right.');
     await db.update('gyms', { _id: gymId }, hashed(newPassword(body.password)));
@@ -514,7 +538,9 @@ const adminRoutes = {
     // The members come as bare ids and the money is added up inside the database, one total for each member, so this
     // page does not pull every period and payment of every gym across. A deleted member counts for nothing.
     // ponytail: still one row for each member of every gym; keep running totals on the gym when that gets slow.
-    const [gyms, people, fees, paid] = await Promise.all([db.find('gyms'), db.find('customers', {}, ['gymId', 'deletedAt']), db.sums('memberships', 'customerId', 'fee'), db.sums('transactions', 'customerId', 'amount')]);
+    const [gyms, people, fees, paid, saves] = await Promise.all([db.find('gyms'), db.find('customers', {}, ['gymId', 'deletedAt']), db.sums('memberships', 'customerId', 'fee'), db.sums('transactions', 'customerId', 'amount'), db.find('exports')]);
+    const lastSave = new Map();
+    for (const e of saves) if (!lastSave.has(e.gymId) || lastSave.get(e.gymId).at < e.at) lastSave.set(e.gymId, e);
     const totals = new Map();
     for (const c of people.filter(live)) {
       const t = totals.get(c.gymId) || { members: 0, fee: 0, got: 0 };
@@ -523,7 +549,8 @@ const adminRoutes = {
     return gyms.map((g) => {
       const t = totals.get(g._id) || { members: 0, fee: 0, got: 0 };
       return { id: g._id, email: g.email, gym: g.details.name, owner: g.details.owner, phone: g.details.phone, createdAt: g.createdAt, disabled: g.disabled, firstLoginAt: g.firstLoginAt,
-        lastLoginAt: g.lastLoginAt, validTill: g.validTill, deletedAt: g.deletedAt || null, paidMonths: sum(g.renewals, 'months'), members: t.members, collected: t.got, due: t.fee - t.got };
+        lastLoginAt: g.lastLoginAt, validTill: g.validTill, deletedAt: g.deletedAt || null, paidMonths: sum(g.renewals, 'months'), members: t.members, collected: t.got, due: t.fee - t.got,
+        savedAt: (lastSave.get(g._id) || {}).at || null, savedPlace: (lastSave.get(g._id) || {}).place || '', savedDevice: (lastSave.get(g._id) || {}).device || '' };
     });
   },
   'POST /api/admin/gyms': async ({ body }) => {

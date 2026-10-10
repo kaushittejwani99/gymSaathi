@@ -18,6 +18,7 @@ It costs nothing to run: free hosting, a free database and a free AI key are eno
 - **Delete several at once.** Tick rows on the Members list (or, for the owner of the service, gyms on the Accounts page), or tick all, and delete them together.
 - **Deleted is not gone.** A deleted member waits under Members, Deleted for 30 days and can be brought back with every membership and payment. A deleted gym waits the same way on the Accounts page.
 - **Daily backup.** Once a day every gym's data is kept, for the last 7 days. On the Accounts page, Backups puts a gym back to one of those days; what it held just before is kept too, so a restore can be taken back. Download backup saves everything in one file.
+- **A backup on your own computer, every 7 days.** Each gym with members, and the owner of the service, is asked for one when it is due; the box stays until it is saved. In Chrome and Edge a folder can be chosen once, and later backups are written there by themselves. A gym's file holds its own records; the owner's holds every gym. What is noted: when, the file's name, the folder's name (or "Downloads folder"), and the device. A browser never tells a site the full path of a saved file, so that cannot be noted. The owner sees each gym's last one on the Accounts page.
 - **Mistakes can be corrected.** Change a payment's amount, mode or date, and correct the running membership's months, start date, trainer, diet or fee.
 - **Mistakes can be taken back.** Delete a payment typed in by mistake, undo a renewal made by mistake, delete a member, remove the sample members in one step. The owner of the service can delete a whole gym with everything it holds.
 - **Membership history.** Every period a member buys is saved as its own record and never changed: 1 month now and 3 months later are two records. Every payment is its own record too.
@@ -87,8 +88,9 @@ With `MONGODB_URI` set, in a MongoDB database called `gymsaathi`:
 | `transactions` | payment received from a member. Only ever added |
 | `sessions` | signed-in device |
 | `backups` | gym per day: everything it held, compressed |
+| `exports` | backup saved on somebody's own computer: when, which file, where |
 
-Without `MONGODB_URI` the same six are JSON files in `DATA_DIR`.
+Without `MONGODB_URI` the same seven are JSON files in `DATA_DIR`.
 
 ## Put it online for free
 
@@ -162,7 +164,7 @@ Good to know:
 | `server.js` | logins, the API, and serving the pages |
 | `lib/core.js` | dates, fees, membership status, reminder rules and message text (shared with the browser) |
 | `lib/ai.js` | the registration talk and the question answers |
-| `lib/db.js` | storage: the six collections, as files or in MongoDB |
+| `lib/db.js` | storage: the seven collections, as files or in MongoDB |
 | `lib/cache.js` | the cache: in memory, or in Redis |
 | `lib/xlsx.js` | reading an Excel file's first sheet |
 | `restore.js` | putting a downloaded backup back |

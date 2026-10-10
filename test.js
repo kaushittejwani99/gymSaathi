@@ -404,6 +404,25 @@ async function apiChecks() {
       fs.rmSync(into, { recursive: true, force: true });
     }
 
+    // Every seven days a gym with members, and the owner of the service with gyms, is due to save a backup on their own
+    // computer. The gym's file holds its own records and nobody else's. What is noted is when, which file, where, on what
+    data = await ok(gym('GET', '/api/data'));
+    assert.deepEqual([data.exportDue, data.exports, data.exportDays, (await ok(owner('GET', '/api/data'))).exportDue], [true, [], 7, true]);
+    const file = await ok(gym('GET', '/api/backup'));
+    assert.deepEqual([file.gym.name, file.customers.length > 0, file.customers.every((c) => c.gymId === seen.id), file.memberships.every((p) => p.gymId === seen.id), file.transactions.every((p) => p.gymId === seen.id), 'hash' in file.gym],
+      ['Fit Zone', true, true, true, true, false]);
+    assert.deepEqual([await status(nobody('GET', '/api/backup')), await status(owner('GET', '/api/backup')), await status(gym('POST', '/api/exports', { place: 'x' }))], [401, 400, 400]);
+    let noted = await ok(gym('POST', '/api/exports', { file: 'Fit-Zone-backup.json', place: 'Folder "Gym Backups"', device: 'Win32 Chrome' }));
+    assert.deepEqual([noted.exportDue, noted.exports.map((e) => [e.file, e.place, e.device]), Math.abs(Date.parse(noted.exports[0].at) - Date.now()) < 60e3], [false, [['Fit-Zone-backup.json', 'Folder "Gym Backups"', 'Win32 Chrome']], true]);
+    assert.deepEqual([(await ok(gym('GET', '/api/data'))).exportDue, (await ok(owner('GET', '/api/data'))).exportDue, (await listed('fit.zone')).savedPlace, (await listed('fit.zone')).savedDevice, (await listed('second.gym')).savedAt],
+      [false, true, 'Folder "Gym Backups"', 'Win32 Chrome', null]);
+    // The owner of the service saves under their own name, also while a gym is open; a save with no place is the Downloads folder
+    noted = await ok(owner('POST', `/api/exports?gym=${seen.id}`, { file: 'gymsaathi-all-gyms.json.gz' }));
+    assert.deepEqual([noted.exports.map((e) => e.place), (await ok(owner('GET', '/api/data'))).exportDue, (await ok(gym('GET', '/api/data'))).exports.length], [['Downloads folder'], false, 1]);
+    // Eight days on, both are due again
+    for (const e of await db.find('exports')) await db.update('exports', { _id: e._id }, { at: new Date(Date.now() - 8 * 864e5).toISOString() });
+    assert.deepEqual([(await ok(gym('GET', '/api/data'))).exportDue, (await ok(owner('GET', '/api/data'))).exportDue], [true, true]);
+
     // Several members ticked on the list go together, each as one deleted member does; ids of another gym, of nobody,
     // or twice over are passed by. Several gyms go together the same way, for the owner of the service only
     const many = [];
@@ -446,7 +465,7 @@ async function apiChecks() {
     await ok(owner('POST', '/api/auth/logout'));
     assert.equal(await status(owner('GET', '/api/admin/gyms')), 401);
     // One file per collection, and a write without the JSON content type is refused
-    if (!MONGO) assert.deepEqual(fs.readdirSync(dir).sort(), ['backups.json', 'customers.json', 'gyms.json', 'memberships.json', 'sessions.json', 'transactions.json']);
+    if (!MONGO) assert.deepEqual(fs.readdirSync(dir).sort(), ['backups.json', 'customers.json', 'exports.json', 'gyms.json', 'memberships.json', 'sessions.json', 'transactions.json']);
     const plain = await fetch(`http://127.0.0.1:${srv.address().port}/api/auth/login`, { method: 'POST', body: '{}' });
     assert.equal(plain.status, 415);
   } finally {
