@@ -1,0 +1,17 @@
+{
+  "name": "gymsaathi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gym memberships, fees and WhatsApp reminders, run by voice. Free to host.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "mongodb": "^6.8.0"
+  }
+}

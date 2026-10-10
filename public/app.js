@@ -1,0 +1,581 @@
+// GymSaathi screens: state, the server calls, routing, one delegated listener, the pages and the talking assistant.
+'use strict';
+
+const G = window.Gym;
+const $ = (sel, root = document) => root.querySelector(sel);
+const main = $('#main'), dlg = $('#dialog');
+
+let S = null;         // the GET /api/data payload; null when signed out
+let current = '';     // route name on screen
+let accounts = null;  // the owner's list of gym logins
+let F = { tab: '', q: '' };
+const views = {};     // route name -> (id, query) => html
+const actions = {};   // data-action name -> (el, event) => void | Promise
+
+// ---- small helpers
+
+// Every dynamic value written into HTML goes through esc().
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const money = (n) => esc(G.money(n));
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+const byId = (list, id) => list.find((x) => x.id === id);
+const today = () => G.todayISO();
+const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const opts = (list, selected) => list.map((o) => {
+  const [value, label] = Array.isArray(o) ? o : [o, o];
+  return `<option value="${esc(value)}"${String(value) === String(selected) ? ' selected' : ''}>${esc(label)}</option>`;
+}).join('');
+const field = (label, control, cls = '') => `<label class="field ${cls}"><span>${label}</span>${control}</label>`;
+const input = (name, value, attrs = 'maxlength="200"') => `<input name="${name}" value="${esc(value)}" ${attrs}>`;
+const check = (label, attrs) => `<label class="check"><input type="checkbox" ${attrs}>${label}</label>`;
+const NUM = 'type="number" step="1" min="0" inputmode="numeric"';
+const page = (title, buttons, body) => `<div class="page-head"><h1>${title}</h1><div class="actions">${buttons}</div></div>${body}`;
+const empty = (title, text, cta = '') => `<div class="empty"><strong>${title}</strong><p class="muted">${text}</p><div class="actions">${cta}</div></div>`;
+const table = (cols, rows) => `<div class="table-wrap"><table><thead><tr>${cols.map((c) => (c[0] === '#' ? `<th class="num">${c.slice(1)}</th>` : `<th>${c}</th>`)).join('')}</tr></thead>
+  <tbody>${rows.join('')}</tbody></table></div>`;
+const dialogForm = (title, action, id, body, submit = 'Save') => `
+  <form data-action="${action}" data-id="${esc(id)}">
+    <header class="dialog-head"><h2>${esc(title)}</h2>
+      <button type="button" class="btn ghost icon" data-action="dialog-close" aria-label="Close">${icon('x')}</button></header>
+    <div class="dialog-body">${body}</div>
+    <footer class="dialog-foot"><button type="button" class="btn secondary" data-action="dialog-close">Cancel</button>
+      <button class="btn primary">${submit}</button></footer>
+  </form>`;
+const fd = (form) => Object.fromEntries(new FormData(form));
+const notFound = `<div class="card">${empty('Nothing here', 'This record does not exist any more.', '<a class="btn primary" href="#/dashboard">Go to dashboard</a>')}</div>`;
+
+const STATUS = { active: ['paid', 'Active'], expiring: ['partial', 'Ending soon'], expired: ['overdue', 'Ended'] };
+const pill = (m) => { const [cls, label] = STATUS[G.statusOf(m, today())]; return `<span class="pill ${cls}">${label}</span>`; };
+const planName = (months) => (months === 12 ? '1 year' : `${months} month${months > 1 ? 's' : ''}`);
+const WHAT = { fees: 'Fees pending', expiring: 'Membership ending', expired: 'Membership ended', welcome: 'Welcome' };
+// A WhatsApp button: it opens the chat with the message typed in, and notes that this reminder went out today.
+const waBtn = (m, type, label, cls = 'secondary') => `<a class="btn ${cls}" target="_blank" rel="noopener" href="${esc(G.waLink(m.phone, G.messages(S.gym, m)[type]))}"
+  data-action="remind" data-id="${esc(m.id)}" data-type="${type}">${label}</a>`;
+
+// ---- server
+
+async function api(method, path, body) {
+  // Every write carries a JSON content type: the server's CSRF defence rejects anything else.
+  const init = method === 'GET' ? {} : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) };
+  const res = await fetch(path, init).catch(() => { throw new Error('Could not reach the server. Check your connection and try again.'); });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) return data;
+  if (res.status === 401 && S) { setData(null); location.hash = '#/login'; } // the session ended while working
+  throw Object.assign(new Error(data.error || `Something went wrong (${res.status}).`), { status: res.status });
+}
+
+// The one place S changes. Another gym, or none, never sees what the last one said to the assistant.
+function setData(data) {
+  if (!S || !data || S.user.id !== data.user.id) {
+    F = { tab: '', q: '' };
+    accounts = null;
+    talk = [];
+    reg = null;
+    stopVoice();
+    if (dlg.open) dlg.close();
+  }
+  S = data;
+}
+async function refresh() { setData(await api('GET', '/api/data')); }
+async function load() { await refresh(); route(); }
+
+// ---- routing
+
+function route() {
+  const [path, query] = location.hash.slice(1).split('?');
+  const [name = '', id] = path.split('/').filter(Boolean);
+  document.body.className = S ? '' : 'auth';
+  if (!S) {
+    if (name !== 'login') return location.replace('#/login');
+    main.innerHTML = authView;
+    return undefined;
+  }
+  $('#navAccounts').hidden = !S.user.admin;
+  if (!Object.hasOwn(views, name)) return location.replace('#/dashboard');
+  current = name;
+  main.innerHTML = views[name](id, new URLSearchParams(query)) || notFound;
+  for (const a of document.querySelectorAll('.sidebar nav a')) {
+    if (a.hash === `#/${name}`) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+  $('#gymName').textContent = S.gym.name;
+  document.title = `${name === 'bolo' ? 'Assistant' : cap(name)} - GymSaathi`;
+  if (name === 'bolo') renderTalk();
+  return undefined;
+}
+const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
+window.addEventListener('hashchange', () => {
+  if (dlg.open) dlg.close();
+  if (!location.hash.startsWith('#/bolo')) stopVoice(); // the assistant stops talking when its page is left
+  route();
+  window.scrollTo(0, 0);
+});
+
+// data-action fires on submit for a <form>, on change or input for a field, and on click for anything else.
+async function dispatch(e) {
+  if (!(e.target instanceof Element)) return;
+  if (e.type === 'submit') e.preventDefault();
+  if (e.type === 'click' && e.target.closest('.sidebar a')) document.body.classList.remove('nav-open');
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const on = el.tagName === 'FORM' ? 'submit' : el.matches('select, [type=checkbox]') ? 'change' : el.matches('input, textarea') ? 'input' : 'click';
+  if (on !== e.type || el.dataset.busy) return; // busy: a second click while the first request is in flight
+  el.dataset.busy = 1;
+  try {
+    await actions[el.dataset.action](el, e);
+  } catch (err) {
+    console.error(err);
+    toast(err.message, true);
+  } finally {
+    delete el.dataset.busy;
+  }
+}
+for (const type of ['click', 'submit', 'input', 'change']) document.addEventListener(type, dispatch);
+
+function toast(message, bad) {
+  const host = $('#toasts'), t = document.createElement('div');
+  t.className = bad ? 'toast error' : 'toast';
+  t.textContent = message;
+  host.append(t);
+  if (host.showPopover) {
+    if (host.matches(':popover-open')) host.hidePopover();
+    host.showPopover();
+  }
+  setTimeout(() => t.remove(), bad ? 7000 : 3500);
+}
+function openDialog(html) {
+  dlg.innerHTML = html;
+  if (!dlg.open) dlg.showModal();
+}
+
+Object.assign(actions, {
+  'nav-toggle': () => document.body.classList.toggle('nav-open'),
+  'dialog-close': () => dlg.close(),
+  retry: () => location.reload(),
+  go: (el) => { location.hash = el.dataset.href; },
+  // The link itself opens WhatsApp; this only records that today's reminder went out.
+  async remind(el) {
+    await api('POST', '/api/reminders/sent', { memberId: el.dataset.id, type: el.dataset.type });
+    S.sent[`${el.dataset.id}:${el.dataset.type}`] = true;
+    if (current === 'dashboard') route();
+  },
+});
+
+// ---- sign in
+
+const authView = `
+  <form class="card auth-card" data-action="login">
+    <div><div class="wordmark"><img class="mark" src="/favicon.svg" alt="" width="24" height="24">GymSaathi</div>
+      <p class="tagline">Run your gym by talking</p></div>
+    <div><h1>Sign in</h1><p class="muted">Welcome back.</p></div>
+    ${field('Username', '<input name="email" required maxlength="100" autocomplete="username" autocapitalize="none" spellcheck="false">')}
+    ${field('Password', '<input name="password" type="password" required autocomplete="current-password">')}
+    <button class="btn primary">Sign in</button>
+    <p class="muted">No login yet, or forgot your password? Ask GymSaathi.</p>
+  </form>`;
+
+Object.assign(actions, {
+  async login(form) {
+    await api('POST', '/api/auth/login', fd(form));
+    await refresh();
+    go('#/dashboard');
+  },
+  async logout() {
+    await api('POST', '/api/auth/logout');
+    setData(null);
+    go('#/login');
+  },
+});
+
+// ---- dashboard
+
+views.dashboard = () => {
+  const t = today(), ms = S.members, count = (s) => ms.filter((m) => G.statusOf(m, t) === s).length;
+  const newBtn = `<a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`;
+  if (!ms.length) {
+    return page('Dashboard', '', `<div class="card">${empty(`Welcome to ${esc(S.gym.name)}`,
+      S.gym.price1 ? 'Add your first member: the assistant asks the questions and you answer aloud.' : 'First set your prices in Settings. The assistant quotes them to every new member.',
+      `<a class="btn secondary" href="#/settings">Gym details and prices</a>${newBtn}<button class="btn secondary" data-action="seed">Load sample members</button>`)}</div>`);
+  }
+  const owed = ms.reduce((s, m) => s + G.due(m), 0), month = S.payments.filter((p) => p.date.startsWith(t.slice(0, 7))).reduce((s, p) => s + p.amount, 0);
+  const todo = G.reminders({ gym: S.gym, members: ms, sent: { [t]: S.sent } }, t);
+  const kpi = (label, value, hint, bad) => `<div class="card kpi"><div class="muted">${label}</div><div class="kpi-value ${bad ? 'bad' : ''}">${value}</div><div class="hint">${hint}</div></div>`;
+  return page('Dashboard', newBtn, `
+    <div class="kpis">${kpi('Active members', count('active') + count('expiring'), `${count('expiring')} ending within 7 days`)}
+      ${kpi('Membership ended', count('expired'), 'not renewed yet', count('expired') > 0)}
+      ${kpi('Fees pending', money(owed), `${ms.filter((m) => G.due(m) > 0).length} members`, owed > 0)}
+      ${kpi('Collected this month', money(month), 'payments received')}</div>
+    <section class="card">
+      <div class="card-head"><h2>Today's WhatsApp reminders (${todo.length})</h2><span class="hint">Press a button, WhatsApp opens with the message typed in, press Send.</span></div>
+      ${todo.length ? table(['Member', 'Reminder', ''], todo.map((r) => { const m = byId(ms, r.memberId); return `<tr>
+        <td><a href="#/members/${esc(m.id)}">${esc(m.name)}</a><br><span class="muted">${esc(m.phone)}</span></td>
+        <td>${WHAT[r.type]}${r.type === 'fees' ? `: ${money(G.due(m))}` : `: ${esc(G.fmtDate(m.end))}`}</td>
+        <td class="num">${waBtn(m, r.type, 'Send on WhatsApp', 'primary')}</td></tr>`; }))
+      : empty('Nothing to send today', 'Fees pending and memberships about to end show up here every day.')}
+    </section>`);
+};
+
+// ---- members
+
+const TABS = [['', 'All'], ['active', 'Active'], ['expiring', 'Ending soon'], ['expired', 'Ended'], ['due', 'Fees pending']];
+function memberRows() {
+  const q = F.q.trim().toLowerCase(), t = today();
+  const rows = S.members.filter((m) => (!F.tab || (F.tab === 'due' ? G.due(m) > 0 : G.statusOf(m, t) === F.tab)) && (!q || `${m.name} ${m.phone}`.toLowerCase().includes(q)))
+    .sort((a, b) => (a.end > b.end) - (a.end < b.end));
+  if (!rows.length) return empty('No members here', S.members.length ? 'Change the tab or the search.' : 'Add your first member.');
+  return table(['Member', 'Plan', 'Ends', '#Fee due', 'Status'], rows.map((m) => `<tr data-action="go" data-href="#/members/${esc(m.id)}">
+    <td><a href="#/members/${esc(m.id)}">${esc(m.name)}</a><br><span class="muted">${esc(m.phone)}</span></td>
+    <td>${planName(m.months)}${m.pt ? ' + trainer' : ''}${m.diet ? ' + diet' : ''}</td><td>${esc(G.fmtDate(m.end))}</td>
+    <td class="num ${G.due(m) ? 'low' : ''}">${G.due(m) ? money(G.due(m)) : ''}</td><td>${pill(m)}</td></tr>`));
+}
+const plansOf = () => G.PLANS.filter((p) => p === 1 || G.num(S.gym[`price${p}`])).map((p) => [p, `${planName(p)}: ${G.money(G.planPrice(S.gym, p))}`]);
+const MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Other'];
+// The typed form: for a correction, or where speaking is not possible. `plan` adds the membership and money fields.
+const memberForm = (m, plan) => `<div class="grid">
+  ${field('Name', input('name', m.name, 'required maxlength="80"'))}
+  ${field('Mobile number', input('phone', m.phone, 'required type="tel" inputmode="numeric" maxlength="15"'))}
+  ${field('Gender', `<select name="gender">${opts([['', 'Not said'], 'Male', 'Female'], m.gender)}</select>`)}
+  ${field('Age', input('age', m.age, NUM))}
+  ${field('Weight (kg)', input('weight', m.weight, 'type="number" step="0.1" min="0" inputmode="decimal"'))}
+  ${field('Height', input('height', m.height, 'maxlength="30"'))}
+  ${field('Goal', input('goal', m.goal, 'maxlength="100"'))}
+  ${field('Health problem, injury', input('health', m.health, 'maxlength="150"'))}
+  ${field('Batch', input('batch', m.batch, 'maxlength="40" placeholder="Morning or Evening"'))}
+  <div class="row">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
+  ${plan ? `${field('Plan', `<select name="months">${opts(plansOf(), m.months || 1)}</select>`)}
+  ${field('Starts on', `<input type="date" name="start" value="${esc(m.start || today())}">`)}
+  ${field('Fee (leave empty for the gym\'s price)', input('fee', m.fee == null ? '' : m.fee, NUM))}
+  ${field('Paid now', input('paid', m.paid || '', NUM))}
+  ${field('Paid by', `<select name="mode">${opts(MODES, 'Cash')}</select>`)}` : ''}</div>`;
+const memberBody = (form) => { const b = fd(form); return { ...b, pt: !!form.pt.checked, diet: !!form.diet.checked }; };
+
+views.members = (id) => {
+  if (!id) {
+    return page('Members', `<button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
+      <div class="card"><div class="tabs">${TABS.map(([v, label]) => `<button class="tab" data-action="tab" data-value="${v}" ${F.tab === v ? 'aria-pressed="true"' : ''}>${label}</button>`).join('')}</div>
+        <div class="filters"><input type="search" data-action="search" value="${esc(F.q)}" placeholder="Search name or mobile number" aria-label="Search members"></div>
+        <div id="list">${memberRows()}</div></div>`);
+  }
+  const m = byId(S.members, id);
+  if (!m) return '';
+  const owed = G.due(m), pays = S.payments.filter((p) => p.memberId === m.id).sort((a, b) => (a.date < b.date) - (a.date > b.date));
+  const row = (label, value) => (value || value === 0 ? `<tr><td class="muted">${label}</td><td>${esc(value)}</td></tr>` : '');
+  return page(`${esc(m.name)} ${pill(m)}`, `<button class="btn secondary" data-action="member-edit" data-id="${esc(m.id)}">${icon('edit')}Edit</button>
+      <button class="btn danger" data-action="member-delete" data-id="${esc(m.id)}" data-name="${esc(m.name)}">${icon('trash')}Delete</button>`, `
+    <div class="cols">
+      <section class="card"><div class="card-head"><h2>Membership</h2></div><div class="card-body">
+        <p><strong>${planName(m.months)}</strong>${m.pt ? ' + personal trainer' : ''}${m.diet ? ' + diet plan' : ''}<br>${esc(G.fmtDate(m.start))} to ${esc(G.fmtDate(m.end))}</p>
+        <p>Fee ${money(m.fee)}, paid ${money(m.paid)}${owed ? `, <span class="low">pending ${money(owed)}</span>` : ', nothing pending'}</p>
+        <div class="actions">
+          ${owed ? `<button class="btn primary" data-action="pay-full" data-id="${esc(m.id)}" data-mode="Cash">Got ${money(owed)} in cash</button>
+            <button class="btn secondary" data-action="pay-full" data-id="${esc(m.id)}" data-mode="UPI">Got it by UPI</button>
+            <button class="btn secondary" data-action="pay-part" data-id="${esc(m.id)}">Part payment</button>` : ''}
+          <button class="btn ${owed ? 'secondary' : 'primary'}" data-action="renew" data-id="${esc(m.id)}">Renew</button></div>
+      </div></section>
+      <section class="card"><div class="card-head"><h2>WhatsApp</h2></div><div class="card-body">
+        <p class="muted">Opens WhatsApp on ${esc(m.phone)} with the message typed in.</p>
+        <div class="actions">${owed ? waBtn(m, 'fees', 'Fees reminder', 'primary') : ''}${waBtn(m, G.statusOf(m, today()) === 'expired' ? 'expired' : 'expiring', 'Renewal reminder')}${waBtn(m, 'welcome', 'Welcome message')}</div>
+      </div></section>
+    </div>
+    <div class="cols">
+      <section class="card"><div class="card-head"><h2>Details</h2></div><div class="table-wrap"><table><tbody>
+        ${row('Mobile', m.phone)}${row('Gender', m.gender)}${row('Age', m.age)}${row('Weight', m.weight && `${m.weight} kg`)}${row('Height', m.height)}${row('Goal', m.goal)}
+        ${row('Health', m.health)}${row('Batch', m.batch)}${row('Joined', G.fmtDate(m.joinedAt))}${row('Notes', m.notes)}</tbody></table></div></section>
+      <section class="card"><div class="card-head"><h2>Payments</h2></div>
+        ${pays.length ? table(['Date', 'Paid by', '#Amount'], pays.map((p) => `<tr><td>${esc(G.fmtDate(p.date))}</td><td>${esc(p.mode)}</td><td class="num">${money(p.amount)}</td></tr>`)) : empty('No payment yet', '')}
+        ${m.history.length ? `<div class="card-body"><p class="hint">Earlier: ${m.history.map((h) => `${planName(h.months)} from ${esc(G.fmtDate(h.start))}`).join('; ')}</p></div>` : ''}
+      </section>
+    </div>`);
+};
+
+Object.assign(actions, {
+  tab(el) { F.tab = el.dataset.value; route(); },
+  search(el) { F.q = el.value; $('#list').innerHTML = memberRows(); },
+  async seed() { await api('POST', '/api/seed'); toast('Sample members loaded'); await load(); },
+  'member-new'() { openDialog(dialogForm('New member', 'member-save', '', memberForm({}, true), 'Save member')); },
+  'member-edit'(el) { openDialog(dialogForm('Edit member', 'member-save', el.dataset.id, memberForm(byId(S.members, el.dataset.id)))); },
+  async 'member-save'(form) {
+    const id = form.dataset.id, m = await api(id ? 'PUT' : 'POST', `/api/members${id ? `/${id}` : ''}`, memberBody(form));
+    dlg.close();
+    toast(id ? 'Saved' : `${m.name} is added`);
+    if (reg && !id) reg = null; // the form the assistant had filled was saved from here
+    await refresh();
+    go(`#/members/${m.id}`);
+  },
+  'member-delete'(el) {
+    openDialog(`<div class="dialog-body"><h2>Delete ${esc(el.dataset.name)}?</h2><p class="muted">The member and their payments are removed. This cannot be undone.</p></div>
+      <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button>
+        <button class="btn danger" data-action="member-delete-yes" data-id="${esc(el.dataset.id)}">Delete</button></footer>`);
+  },
+  async 'member-delete-yes'(el) {
+    await api('DELETE', `/api/members/${el.dataset.id}`);
+    dlg.close();
+    toast('Member deleted');
+    await refresh();
+    go('#/members');
+  },
+  async 'pay-full'(el) {
+    const m = byId(S.members, el.dataset.id), sum = G.due(m);
+    await api('POST', `/api/members/${m.id}/pay`, { amount: sum, mode: el.dataset.mode });
+    toast(`${G.money(sum)} received from ${m.name}`);
+    await load();
+  },
+  'pay-part'(el) {
+    const m = byId(S.members, el.dataset.id);
+    openDialog(dialogForm(`Payment from ${m.name}`, 'pay-save', m.id, `<div class="grid">${field(`Amount (pending ${G.money(G.due(m))})`, input('amount', '', `${NUM} required max="${G.due(m)}"`))}
+      ${field('Paid by', `<select name="mode">${opts(MODES, 'Cash')}</select>`)}</div>`, 'Save payment'));
+  },
+  async 'pay-save'(form) {
+    await api('POST', `/api/members/${form.dataset.id}/pay`, fd(form));
+    dlg.close();
+    toast('Payment saved');
+    await load();
+  },
+  renew(el) {
+    const m = byId(S.members, el.dataset.id), t = today(), start = m.end >= t ? G.addDays(m.end, 1) : t;
+    openDialog(dialogForm(`Renew ${m.name}`, 'renew-save', m.id, `<div class="grid">
+      ${field('Plan', `<select name="months">${opts(plansOf(), m.months)}</select>`)}
+      ${field('Starts on', `<input type="date" name="start" value="${esc(start)}">`)}
+      <div class="row span2">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
+      ${field('Paid now', input('paid', '', NUM))}${field('Paid by', `<select name="mode">${opts(MODES, 'Cash')}</select>`)}</div>
+      ${G.due(m) ? `<p class="hint">${G.money(G.due(m))} is still pending from the last period and is added to the new fee.</p>` : ''}`, 'Renew'));
+  },
+  async 'renew-save'(form) {
+    await api('POST', `/api/members/${form.dataset.id}/renew`, memberBody(form));
+    dlg.close();
+    toast('Membership renewed');
+    await load();
+  },
+});
+
+// ---- the assistant: it speaks, listens, and registers a member by asking
+
+let talk = [];      // { who: 'ai' | 'me', text, welcome: memberId }
+let reg = null;     // the registration in progress: { form, asked, tries, done, fee }
+let thinking = false;
+let hearing = null; // the speech recognition that is listening now
+// The browser's own speech recognition and voice (Chrome, Edge, Android). Without them the owner types and reads.
+const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function stopVoice() {
+  if (hearing) hearing.abort();
+  if (window.speechSynthesis) speechSynthesis.cancel();
+}
+// Says the text aloud in Hindi. Resolves when it has been said, or at once where the browser has no voice.
+function speak(text) {
+  return new Promise((done) => {
+    if (!window.speechSynthesis || !text) return done();
+    const u = new SpeechSynthesisUtterance(text.replace(/[*_]/g, ''));
+    u.lang = 'hi-IN';
+    u.onend = u.onerror = done;
+    setTimeout(done, 2500 + text.length * 110); // some browsers never report the end
+    speechSynthesis.cancel();
+    return speechSynthesis.speak(u);
+  });
+}
+// Listens for one answer. Resolves with what was heard, rejects when nothing was.
+function listen() {
+  return new Promise((resolve, reject) => {
+    const rec = hearing = new Speech();
+    let text = '', why = 'no-speech';
+    Object.assign(rec, { lang: 'hi-IN', interimResults: true });
+    rec.onresult = (e) => { text = [...e.results].map((r) => r[0].transcript).join(' '); const box = $('#boloInput'); if (box) box.value = text; };
+    rec.onerror = (e) => { why = e.error; };
+    rec.onend = () => { hearing = null; renderTalk(); return text.trim() ? resolve(text.trim()) : reject(new Error(why)); };
+    rec.start();
+    renderTalk();
+  });
+}
+// After the assistant has spoken it listens for the answer by itself, so a registration needs no button between questions.
+async function listenNext() {
+  if (!Speech || current !== 'bolo') return;
+  try { await heard(await listen()); } catch (e) {
+    if (e.message === 'not-allowed') toast('Allow the microphone for this site, then press the mic.', true);
+  }
+}
+async function says(text, more) {
+  talk.push({ who: 'ai', text, ...more });
+  renderTalk();
+  await speak(text);
+}
+
+async function regTurn(said) {
+  thinking = true;
+  renderTalk();
+  try {
+    const r = await api('POST', '/api/register/turn', { form: reg.form, asked: reg.asked, said, tries: reg.tries });
+    Object.assign(reg, { form: r.form, asked: r.next, tries: r.tries, done: r.done, fee: r.fee });
+    thinking = false;
+    await says(r.say);
+    if (!r.done) listenNext();
+  } finally {
+    thinking = false;
+    renderTalk();
+  }
+}
+function startReg() {
+  reg = { form: {}, asked: null, tries: 0, done: false, fee: 0 };
+  return regTurn('');
+}
+// What the owner said or typed: an answer to the question in progress, or a question of their own.
+async function heard(text) {
+  text = text.trim();
+  if (!text || thinking) return undefined;
+  const box = $('#boloInput');
+  if (box) box.value = '';
+  talk.push({ who: 'me', text });
+  if (reg && !reg.done) return regTurn(text);
+  thinking = true;
+  renderTalk();
+  try {
+    const r = await api('POST', '/api/chat', { question: text });
+    thinking = false;
+    if (r.start === 'register') return startReg();
+    return says(r.answer);
+  } finally {
+    thinking = false;
+    renderTalk();
+  }
+}
+
+// The filled form, shown for one look before it is saved.
+function regCard() {
+  const f = reg.form, start = today(), owed = Math.max(0, reg.fee - (f.paid || 0)), yes = (v) => (v ? 'Yes' : 'No');
+  const row = (label, value) => (value || value === 0 ? `<div class="trow"><span class="muted">${label}</span><span>${esc(value)}</span></div>` : '');
+  return `<div class="bill-card"><strong>New member</strong>
+    ${row('Name', f.name)}${row('Mobile', f.phone)}${row('Gender', f.gender)}${row('Age', f.age)}${row('Weight', f.weight && `${f.weight} kg`)}${row('Height', f.height)}
+    ${row('Goal', f.goal)}${row('Health', f.health)}${row('Batch', f.batch)}${row('Personal trainer', yes(f.pt))}${row('Diet plan', yes(f.diet))}
+    ${row('Plan', `${planName(f.months)}, ${G.fmtDate(start)} to ${G.fmtDate(G.endOf(start, f.months))}`)}
+    <div class="trow total"><span>Fee</span><span>${money(reg.fee)}</span></div>
+    ${row('Paid now', G.money(f.paid || 0))}${owed ? `<div class="trow"><span class="low">Pending</span><span class="low">${money(owed)}</span></div>` : ''}
+    <div class="row"><button class="btn primary" data-action="reg-save">Save member</button><button class="btn secondary" data-action="reg-edit">Change</button>
+      <button class="btn ghost" data-action="reg-cancel">Cancel</button></div></div>`;
+}
+
+function renderTalk() {
+  const log = $('#talk');
+  if (!log) return;
+  log.innerHTML = (talk.length ? talk.map((t) => { const m = t.welcome && byId(S.members, t.welcome); return `<div class="msg ${t.who === 'me' ? 'user' : ''}">${esc(t.text)}
+      ${m ? `<div class="msg-meta">${waBtn(m, 'welcome', 'Send welcome on WhatsApp', 'primary')}<a class="btn secondary" href="#/members/${esc(m.id)}">Open member</a></div>` : ''}</div>`; }).join('')
+    : `<p class="muted">Press <strong>New member</strong> and answer the questions aloud, or ask about your gym:</p>
+       ${['किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'].map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('')}`)
+    + (reg && reg.done ? regCard() : '') + (thinking ? '<div class="msg typing" aria-label="Thinking"><i></i><i></i><i></i></div>' : '');
+  log.scrollTop = log.scrollHeight;
+  const mic = $('#boloMic');
+  if (mic) { mic.hidden = !Speech; if (hearing) mic.setAttribute('aria-pressed', 'true'); else mic.removeAttribute('aria-pressed'); }
+  const state = $('#boloState');
+  if (state) state.textContent = hearing ? 'Listening… speak now' : reg && !reg.done ? 'Registering a new member' : '';
+}
+
+views.bolo = (id, q) => {
+  // Reached from a 'New member by voice' button: the questions start at once.
+  if (q.get('new') && !(reg && !reg.done)) setTimeout(() => { history.replaceState(null, '', '#/bolo'); startReg().catch((e) => toast(e.message, true)); });
+  return page('Assistant', `<button class="btn primary" data-action="reg-start">${icon('plus')}New member</button>`, `
+    <div class="card talk-card"><div id="talk" class="chat-log" aria-live="polite"></div>
+      <div class="card-body hint" id="boloState"></div>
+      <form class="chat-form" data-action="bolo-send">
+        <button type="button" id="boloMic" class="btn secondary icon mic" data-action="bolo-mic" aria-label="Speak" hidden>${icon('mic')}</button>
+        <label class="sr-only" for="boloInput">Your answer or question</label>
+        <input id="boloInput" name="said" autocomplete="off" maxlength="500" placeholder="${Speech ? 'Speak, or type here' : 'Type your answer or question'}">
+        <button class="btn primary icon" aria-label="Send">${icon('send')}</button>
+      </form></div>
+    <p class="hint">${Speech ? 'The assistant speaks each question and then listens. Press the mic to answer again, or to stop it listening.' : 'This browser cannot listen. Open GymSaathi in Chrome to speak; here you can type.'}
+      ${S.aiEnabled ? '' : ' The AI is switched off, so answer one thing at a time.'}</p>`);
+};
+
+Object.assign(actions, {
+  'reg-start'() { stopVoice(); talk = []; return startReg(); },
+  'reg-cancel'() { stopVoice(); reg = null; talk.push({ who: 'ai', text: 'ठीक है, रद्द कर दिया।' }); renderTalk(); },
+  'reg-edit'() { openDialog(dialogForm('New member', 'member-save', '', memberForm({ ...reg.form, fee: reg.fee }, true), 'Save member')); },
+  async 'reg-save'() {
+    const f = reg.form, m = await api('POST', '/api/members', { ...f, fee: reg.fee, mode: 'Cash' });
+    reg = null;
+    await refresh();
+    await says(`${m.name} जी जुड़ गए।${G.due(m) ? ` ${Math.round(G.due(m))} रुपये बाकी हैं, उनका रिमाइंडर रोज़ डैशबोर्ड पर मिलेगा।` : ''} व्हाट्सऐप पर स्वागत संदेश भेज दीजिए।`, { welcome: m.id });
+  },
+  'bolo-mic'() {
+    if (hearing) return hearing.stop();
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    return listenNext();
+  },
+  'bolo-send'(form) { stopVoice(); return heard(form.said.value); },
+  'bolo-ask'(el) { return heard(el.textContent); },
+});
+
+// ---- settings
+
+views.settings = () => {
+  const g = S.gym, price = (name, label) => field(label, input(name, g[name] || '', NUM));
+  return page('Settings', '', `
+    <form data-action="gym-save">
+      <section class="card"><div class="card-head"><h2>Your gym</h2><span class="hint">The assistant and the WhatsApp messages use these.</span></div>
+        <div class="card-body grid">
+          ${field('Gym name', input('name', g.name, 'required maxlength="80"'))}${field('Owner\'s name', input('owner', g.owner, 'maxlength="80"'))}
+          ${field('Phone', input('phone', g.phone, 'maxlength="30"'))}${field('UPI ID for fees (optional)', input('upi', g.upi, 'maxlength="80"'))}
+          ${field('Address', input('address', g.address, 'maxlength="300"'), 'span2')}
+          ${field('Timings', input('timings', g.timings, 'maxlength="150" placeholder="सुबह 5 से 10, शाम 4 से 10"'), 'span2')}
+          ${field('Amenities', input('amenities', g.amenities, 'maxlength="400" placeholder="कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर"'), 'span2')}
+        </div></section>
+      <section class="card"><div class="card-head"><h2>Prices</h2><span class="hint">Leave 3, 6 or 12 months empty to charge the monthly price times the months.</span></div>
+        <div class="card-body grid three">${price('price1', '1 month')}${price('price3', '3 months')}${price('price6', '6 months')}${price('price12', '1 year')}
+          ${price('ptPrice', 'Personal trainer, per month')}${price('dietPrice', 'Diet plan, per month')}</div></section>
+      <div class="form-foot"><button class="btn primary">Save settings</button></div>
+    </form>
+    <section class="card"><div class="card-head"><h2>Account</h2><span class="hint">Signed in as ${esc(S.user.email)}</span></div>
+      <div class="card-body actions"><button class="btn secondary" data-action="password-edit">Change password</button><button class="btn secondary" data-action="logout">Sign out</button></div></section>`);
+};
+const passwordField = (label, name, auto) => field(label, `<input name="${name}" type="password" required minlength="8" maxlength="200" autocomplete="${auto}">`, 'span2');
+
+Object.assign(actions, {
+  async 'gym-save'(form) { await api('PUT', '/api/gym', fd(form)); toast('Settings saved'); await load(); },
+  'password-edit'() {
+    openDialog(dialogForm('Change password', 'password-save', '', `<div class="grid">${passwordField('Current password', 'current', 'current-password')}
+      ${passwordField('New password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Change password'));
+  },
+  async 'password-save'(form) { await api('POST', '/api/auth/password', fd(form)); dlg.close(); toast('Password changed. Other devices are signed out.'); },
+});
+
+// ---- accounts (the owner of the service only)
+
+async function loadAccounts() { accounts = await api('GET', '/api/admin/users'); if (current === 'accounts') route(); }
+views.accounts = () => {
+  if (!S.user.admin) return notFound;
+  if (!accounts) {
+    loadAccounts().catch((err) => toast(err.message, true));
+    return page('Accounts', '', `<div class="card">${empty('Loading accounts', 'One moment.')}</div>`);
+  }
+  return page('Accounts', `<button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`, `
+    <div class="card">${table(['Gym', 'Username', 'Created', 'Status', ''], accounts.map((a) => `<tr>
+      <td>${esc(a.gym)}</td><td>${esc(a.email)}</td><td>${esc(G.fmtDate(String(a.createdAt).slice(0, 10)))}</td>
+      <td><span class="pill ${a.disabled ? 'overdue' : 'paid'}">${a.disabled ? 'Switched off' : 'Active'}</span></td>
+      <td class="num">${a.id === S.user.id ? '<span class="muted">You</span>' : `
+        <button class="btn secondary" data-action="account-password" data-id="${esc(a.id)}" data-name="${esc(a.email)}">Reset password</button>
+        <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button>`}</td></tr>`))}</div>
+    <p class="hint">Each gym signs in with its own username and sees only its own members. Switching a gym off signs it out and blocks its login; its data is kept.</p>`);
+};
+Object.assign(actions, {
+  'account-new'() {
+    openDialog(dialogForm('Add gym', 'account-save', '', `<div class="grid">${field('Gym name', input('gymName', '', 'required maxlength="80"'), 'span2')}
+      ${field('Username', input('email', '', 'required maxlength="100" autocapitalize="none" spellcheck="false"'), 'span2')}
+      ${passwordField('Password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Create login'));
+  },
+  async 'account-save'(form) { await api('POST', '/api/admin/users', fd(form)); dlg.close(); toast('Login created. Give the gym its username and password.'); await loadAccounts(); },
+  'account-password'(el) {
+    openDialog(dialogForm(`Reset password for ${el.dataset.name}`, 'account-password-save', el.dataset.id, `<div class="grid">${passwordField('New password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Set password'));
+  },
+  async 'account-password-save'(form) { await api('PUT', `/api/admin/users/${form.dataset.id}`, { password: fd(form).password }); dlg.close(); toast('Password reset. That gym is signed out everywhere.'); },
+  async 'account-toggle'(el) { await api('PUT', `/api/admin/users/${el.dataset.id}`, { disabled: !!el.dataset.off }); toast(el.dataset.off ? 'Gym switched off' : 'Gym switched on'); await loadAccounts(); },
+});
+
+// ---- start
+
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    await refresh();
+  } catch (err) {
+    if (err.status !== 401) {
+      main.innerHTML = `<div class="card">${empty('GymSaathi could not load', esc(err.message), '<button class="btn primary" data-action="retry">Try again</button>')}</div>`;
+      return;
+    }
+  }
+  route();
+});
