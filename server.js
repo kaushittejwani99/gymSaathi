@@ -331,7 +331,7 @@ const either = {
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
     if (!account) return { user, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, aiEnabled: ai.aiEnabled() };
     const data = await loadGym(account);
-    return { user, ...data, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
+    return { user, ...data, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
 };
 
