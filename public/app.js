@@ -89,7 +89,14 @@ const waBtn = (m, type, label, cls = 'secondary') => `<a class="btn ${cls}" targ
 
 // ---- server
 
+// While anything is being fetched a bar runs along the top of the page, so a slow answer never looks like a dead button.
+let waiting = 0;
+const loading = (by) => { waiting += by; document.body.classList.toggle('loading', waiting > 0); };
 async function api(method, path, body) {
+  loading(1);
+  try { return await ask(method, path, body); } finally { loading(-1); }
+}
+async function ask(method, path, body) {
   // Every write carries a JSON content type: the server's CSRF defence rejects anything else.
   const init = method === 'GET' ? {} : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) };
   const res = await fetch(view ? `${path}?gym=${view}` : path, init).catch(() => { throw new Error('Could not reach the server. Check your connection and try again.'); });
@@ -734,7 +741,8 @@ function deviceName() {
 // The file itself: a gym's own records, or for the owner of the service every gym's.
 async function backupFile() {
   if (S.user.admin) {
-    const res = await fetch('/api/admin/backup').catch(() => null);
+    loading(1);
+    const res = await fetch('/api/admin/backup').catch(() => null).finally(() => loading(-1));
     if (!res || !res.ok) throw new Error('The backup could not be made. Try again.');
     return { name: `gymsaathi-all-gyms-${today()}.json.gz`, blob: await res.blob() };
   }

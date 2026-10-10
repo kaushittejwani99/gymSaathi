@@ -258,3 +258,11 @@ td .actions { flex-wrap: wrap; justify-content: flex-end; min-width: 300px; }
 .bulk { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: #fef2f2; border-bottom: 1px solid #fecaca; }
 td.pick { width: 36px; }
 td.pick input, th input[type=checkbox] { width: 18px; height: 18px; }
+/* Something is at work: a bar along the top of the page, and a turning ring on the button that was pressed. */
+#loading { position: fixed; inset: 0 0 auto 0; height: 4px; z-index: 1000; display: none; pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%, var(--accent, #047857) 50%, transparent 100%) 0 0 / 40% 100% no-repeat, #d1fae5; }
+body.loading #loading { display: block; animation: slide 1.1s linear infinite; }
+@keyframes slide { from { background-position: -40% 0, 0 0; } to { background-position: 140% 0, 0 0; } }
+.btn[data-busy] { pointer-events: none; }
+.btn[data-busy]::after { content: ''; flex: none; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
