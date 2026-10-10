@@ -49,10 +49,10 @@ const payNote = () => G.str(process.env.PAY_NOTE, 200);
 const over = (g) => `Your ${g.renewals.length ? 'plan' : 'free trial'} is over. Pay ₹${PRICE} to start the service again.${payNote() && ` ${payNote()}`}`;
 const gymById = async (id) => (await db.find('gyms', { _id: id }))[0];
 
-async function createGym(email, password, name) {
+// `details` is the gym as its Settings page holds it: name, owner, mobile, address, timings, amenities, UPI and prices.
+async function createGym(email, password, details) {
   if (email === adminEmail() || (await db.find('gyms', { email })).length) return null;
-  const g = { _id: newId(), email, ...hashed(password), createdAt: stamp(), disabled: false, firstLoginAt: null, lastLoginAt: null, validTill: null, renewals: [], sent: {},
-    details: { name, owner: '', phone: '', address: '', timings: '', amenities: '', upi: '', price1: 0, price3: 0, price6: 0, price12: 0, ptPrice: 0, dietPrice: 0 } };
+  const g = { _id: newId(), email, ...hashed(password), createdAt: stamp(), disabled: false, firstLoginAt: null, lastLoginAt: null, validTill: null, renewals: [], sent: {}, details };
   await db.insert('gyms', g);
   return g;
 }
@@ -355,7 +355,9 @@ const adminRoutes = {
     });
   },
   'POST /api/admin/gyms': async ({ body }) => {
-    const made = await createGym(loginName(body.email), newPassword(body.password), required(body.gymName, 'The gym name', 80));
+    // The gym is handed over filled in: who owns it and how to reach them are needed, the rest may follow in its Settings.
+    const details = { ...gymFields(body), owner: required(body.owner, "The owner's name", 80), phone: phoneOf(body.phone) };
+    const made = await createGym(loginName(body.email), newPassword(body.password), details);
     return made ? { id: made._id } : fail(409, 'That username is already taken.');
   },
   'PUT /api/admin/gyms/:id': async ({ body, id }) => {

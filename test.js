@@ -62,10 +62,14 @@ async function apiChecks() {
     assert.equal(await status(nobody('GET', '/api/data')), 401);
     await ok(owner('POST', '/api/auth/login', { email: 'owner', password: 'owner-password' }));
     assert.deepEqual([(await ok(owner('GET', '/api/data'))).gym, await status(owner('POST', '/api/members', { name: 'A', phone: '9829011111', months: 1 }))], [null, 400]);
-    await ok(owner('POST', '/api/admin/gyms', { gymName: 'Fit Zone', email: 'fit.zone', password: 'first-password' }));
-    await ok(owner('POST', '/api/admin/gyms', { gymName: 'Fit Zone', email: 'second.gym', password: 'first-password' }));
-    assert.deepEqual([await status(owner('POST', '/api/admin/gyms', { gymName: 'Copy', email: 'fit.zone', password: 'first-password' })),
-      await status(owner('POST', '/api/admin/gyms', { gymName: 'Copy', email: 'owner', password: 'first-password' }))], [409, 409]);
+    // A gym is added with its own details filled in: the gym, its owner and how to reach them, and its prices
+    const fitZone = { name: 'Fit Zone', owner: 'Vikram', phone: '98290 00001', address: 'Azad Chowk, Bhilwara', amenities: 'Cardio, Steam', timings: '5 to 10', upi: 'fit@upi', price1: 800 };
+    await ok(owner('POST', '/api/admin/gyms', { ...fitZone, email: 'fit.zone', password: 'first-password' }));
+    await ok(owner('POST', '/api/admin/gyms', { ...fitZone, email: 'second.gym', password: 'first-password' }));
+    assert.deepEqual([await status(owner('POST', '/api/admin/gyms', { ...fitZone, email: 'fit.zone', password: 'first-password' })), await status(owner('POST', '/api/admin/gyms', { ...fitZone, email: 'owner', password: 'first-password' })),
+      await status(owner('POST', '/api/admin/gyms', { ...fitZone, owner: '', email: 'third.gym', password: 'first-password' })), await status(owner('POST', '/api/admin/gyms', { ...fitZone, phone: '123', email: 'third.gym', password: 'first-password' })),
+      await status(owner('POST', '/api/admin/gyms', { ...fitZone, name: '', email: 'third.gym', password: 'first-password' }))], [409, 409, 400, 400, 400]);
+    assert.deepEqual([(await listed('fit.zone')).owner, (await listed('fit.zone')).phone, await listed('third.gym')], ['Vikram', '9829000001', undefined]);
 
     // A gym's free month starts at its first sign-in, to the minute; signing in again does not move it
     assert.deepEqual([(await listed('fit.zone')).firstLoginAt, (await listed('fit.zone')).validTill], [null, null]);
@@ -78,6 +82,8 @@ async function apiChecks() {
     await ok(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'first-password' }));
     assert.deepEqual([(await listed('fit.zone')).firstLoginAt, (await listed('fit.zone')).validTill, (await ok(gym('GET', '/api/data'))).validTill], [fit.firstLoginAt, fit.validTill, fit.validTill]);
 
+    let data = await ok(gym('GET', '/api/data'));
+    assert.deepEqual([data.gym.address, data.gym.amenities, data.gym.upi, data.gym.price1, data.gym.price3], ['Azad Chowk, Bhilwara', 'Cardio, Steam', 'fit@upi', 800, 0]);
     const prices = { name: 'Fit Zone', owner: 'Vikram', price1: 1000, price3: 2700, price12: 9000, ptPrice: 2000, dietPrice: 500 };
     assert.equal((await ok(gym('PUT', '/api/gym', prices))).price3, 2700);
 
@@ -100,7 +106,7 @@ async function apiChecks() {
     // Saving the form makes the member. Nothing was paid, so the fee is pending and is asked for today
     const rahul = await ok(gym('POST', '/api/members', { ...t.form, fee: t.fee }));
     assert.deepEqual([rahul.fee, rahul.paid, rahul.pt, rahul.start, rahul.end, rahul.joinedAt], [8700, 0, true, today, G.endOf(today, 3), today]);
-    let data = await ok(gym('GET', '/api/data'));
+    data = await ok(gym('GET', '/api/data'));
     assert.deepEqual(G.reminders({ gym: data.gym, members: data.members, sent: { [today]: data.sent } }, today).map((r) => [r.type, r.name]), [['fees', 'Rahul Sharma']]);
     assert.equal(await status(gym('POST', '/api/members', { name: 'Twin', phone: '+91 98290-11111', months: 1 })), 409); // the same mobile number
     assert.deepEqual([await status(gym('POST', '/api/members', { name: 'No Plan', phone: '9829011113', months: 0 })), await status(gym('POST', '/api/members', { name: 'Long', phone: '9829011113', months: 37 })),

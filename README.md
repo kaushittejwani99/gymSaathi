@@ -14,7 +14,7 @@ It costs nothing to run: free hosting, a free database and a free AI key are eno
 - **Ask anything.** "Kiski fees baaki hai?", "Is mahine kitna paisa aaya?", "Rahul ki membership kab khatam hogi?" The assistant answers from the gym's own members and reads the answer aloud.
 - **Payments.** One tap for "got the full amount in cash" or by UPI, or enter a part payment. Renew a membership in one tap.
 - **Membership history.** Every period a member buys is saved as its own record and never changed: 1 month now and 3 months later are two records. Every payment is its own record too.
-- **One login per gym.** You (the service owner) create a login for each gym on the Accounts page. A gym sees only its own members.
+- **One login per gym.** You (the service owner) add each gym on the Accounts page with its details already filled in: gym name, owner's name and mobile number, address, timings, amenities, UPI ID, prices, and its username and password. A gym sees only its own members.
 - **First month free, then ₹999 a month.** A gym's free month starts the moment it first signs in. It stays signed in (there is no sign-out button) until that time is over. Then it is signed out on every device and sees: *Your free trial is over. Pay ₹999 to start the service again.* In its last five days the dashboard warns it. When it pays, press **Paid: +1 month** (or **+1 year**) on the Accounts page and it can sign in again.
 - **You see every gym.** The Accounts page shows each gym's members, fees pending, money collected, first and last sign-in and the day its time ends. **Open** shows a gym exactly as the gym sees it. **Ask on WhatsApp** sends the gym a payment reminder.
 

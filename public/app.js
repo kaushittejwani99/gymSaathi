@@ -527,21 +527,26 @@ Object.assign(actions, {
 
 // ---- settings
 
+// The gym's details and prices: on its Settings page, and in the form the owner of the service fills to add a gym,
+// where the owner's name and mobile number are needed (`must`).
+const gymDetails = (g, must = '') => `
+  ${field('Gym name', input('name', g.name, 'required maxlength="80"'))}${field('Owner\'s name', input('owner', g.owner, `${must} maxlength="80"`))}
+  ${field('Owner\'s mobile number', input('phone', g.phone, `${must} type="tel" inputmode="numeric" maxlength="30"`))}${field('UPI ID for fees (optional)', input('upi', g.upi, 'maxlength="80"'))}
+  ${field('Address', input('address', g.address, 'maxlength="300"'), 'span2')}
+  ${field('Timings', input('timings', g.timings, 'maxlength="150" placeholder="सुबह 5 से 10, शाम 4 से 10"'), 'span2')}
+  ${field('Amenities', input('amenities', g.amenities, 'maxlength="400" placeholder="कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर"'), 'span2')}`;
+const gymPrices = (g) => [['price1', '1 month'], ['price3', '3 months'], ['price6', '6 months'], ['price12', '1 year'], ['ptPrice', 'Personal trainer, per month'], ['dietPrice', 'Diet plan, per month']]
+  .map(([name, label]) => field(label, input(name, g[name] || '', NUM))).join('');
+const PRICE_HINT = 'Leave 3, 6 or 12 months empty to charge the monthly price times the months.';
+
 views.settings = () => {
-  const g = S.gym, price = (name, label) => field(label, input(name, g[name] || '', NUM));
+  const g = S.gym;
   return page('Settings', '', `
     <form data-action="gym-save">
       <section class="card"><div class="card-head"><h2>Your gym</h2><span class="hint">The assistant and the WhatsApp messages use these.</span></div>
-        <div class="card-body grid">
-          ${field('Gym name', input('name', g.name, 'required maxlength="80"'))}${field('Owner\'s name', input('owner', g.owner, 'maxlength="80"'))}
-          ${field('Phone', input('phone', g.phone, 'maxlength="30"'))}${field('UPI ID for fees (optional)', input('upi', g.upi, 'maxlength="80"'))}
-          ${field('Address', input('address', g.address, 'maxlength="300"'), 'span2')}
-          ${field('Timings', input('timings', g.timings, 'maxlength="150" placeholder="सुबह 5 से 10, शाम 4 से 10"'), 'span2')}
-          ${field('Amenities', input('amenities', g.amenities, 'maxlength="400" placeholder="कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर"'), 'span2')}
-        </div></section>
-      <section class="card"><div class="card-head"><h2>Prices</h2><span class="hint">Leave 3, 6 or 12 months empty to charge the monthly price times the months.</span></div>
-        <div class="card-body grid three">${price('price1', '1 month')}${price('price3', '3 months')}${price('price6', '6 months')}${price('price12', '1 year')}
-          ${price('ptPrice', 'Personal trainer, per month')}${price('dietPrice', 'Diet plan, per month')}</div></section>
+        <div class="card-body grid">${gymDetails(g)}</div></section>
+      <section class="card"><div class="card-head"><h2>Prices</h2><span class="hint">${PRICE_HINT}</span></div>
+        <div class="card-body grid three">${gymPrices(g)}</div></section>
       <div class="form-foot"><button class="btn primary">Save settings</button></div>
     </form>
     ${view ? '' : `<section class="card"><div class="card-head"><h2>Account</h2><span class="hint">Signed in as ${esc(S.user.email)}</span></div>
@@ -599,11 +604,12 @@ views.accounts = () => {
 };
 Object.assign(actions, {
   'account-new'() {
-    openDialog(dialogForm('Add gym', 'account-save', '', `<div class="grid">${field('Gym name', input('gymName', '', 'required maxlength="80"'), 'span2')}
-      ${field('Username', input('email', '', 'required maxlength="100" autocapitalize="none" spellcheck="false"'), 'span2')}
-      ${passwordField('Password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Create login'));
+    openDialog(dialogForm('Add gym', 'account-save', '', `<h3 class="form-part">The gym and its owner</h3><div class="grid">${gymDetails({}, 'required')}</div>
+      <h3 class="form-part">Prices</h3><p class="hint">${PRICE_HINT}</p><div class="grid three">${gymPrices({})}</div>
+      <h3 class="form-part">Login for the gym</h3><div class="grid">${field('Username', input('email', '', 'required maxlength="100" autocapitalize="none" spellcheck="false" autocomplete="off"'), 'span2')}
+      ${passwordField('Password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Create gym'));
   },
-  async 'account-save'(form) { await api('POST', '/api/admin/gyms', fd(form)); dlg.close(); toast('Login created. Give the gym its username and password.'); await loadAccounts(); },
+  async 'account-save'(form) { await api('POST', '/api/admin/gyms', fd(form)); dlg.close(); toast('Gym created. Give it its username and password.'); await loadAccounts(); },
   'account-paid'(el) {
     const months = Number(el.dataset.months);
     openDialog(`<div class="dialog-body"><h2>${esc(el.dataset.name)} has paid?</h2><p class="muted">It gets ${months === 12 ? '1 year' : '1 month'} more. This is kept in its record.</p></div>
