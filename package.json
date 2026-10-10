@@ -12,6 +12,7 @@
     "node": ">=20.12"
   },
   "dependencies": {
-    "mongodb": "^6.8.0"
+    "mongodb": "^6.8.0",
+    "redis": "^6.3.0"
   }
 }

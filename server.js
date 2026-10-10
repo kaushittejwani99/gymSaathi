@@ -12,6 +12,7 @@ if (fs.existsSync(path.join(ROOT, '.env'))) process.loadEnvFile(path.join(ROOT, 
 
 const G = require('./lib/core');
 const db = require('./lib/db');
+const cache = require('./lib/cache');
 const ai = require('./lib/ai');
 const wa = require('./lib/whatsapp');
 
@@ -19,6 +20,7 @@ const MAX_BODY = 256 * 1024;
 const MAX_FILE = 12 * 1024 * 1024; // a photo or a PDF of old records, sent once to be read
 const KEEP_DELETED_DAYS = 30;       // a deleted member or gym can be brought back for this long, then it goes for good
 const BACKUP_DAYS = Number(process.env.BACKUP_DAYS) || 7; // how many daily backups of each gym are kept
+const CACHE_SECONDS = 300;           // how long a gym's records are kept in the cache when nothing changes them
 const SEND_FROM = 6, SEND_TILL = 21; // reminders go out by themselves from 6 in the morning, and never at night
 const TRIAL_MONTHS = 1, PRICE = 999; // a gym's first month from its first sign-in is free; after that it pays PRICE a month
 const OWNER_DAYS = 30;               // how long the owner of the service stays signed in
@@ -125,7 +127,7 @@ function bucket(key, ms) {
 // ponytail: the queue is in this process, so run one copy of the server.
 const queues = new Map();
 const write = (fn) => (c) => {
-  const run = (queues.get(c.gymId) || Promise.resolve()).then(() => fn(c));
+  const run = (queues.get(c.gymId) || Promise.resolve()).then(() => fn(c)).finally(() => cache.drop(`records:${c.gymId}`)); // whatever it changed is read afresh
   queues.set(c.gymId, run.catch(() => {}));
   return run;
 };
@@ -153,7 +155,9 @@ async function memberById(gymId, id) {
 }
 // Everything of one gym.
 async function loadGym(account) {
-  const [all, periods, everyPaid] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id })));
+  // The three reads below are what every page of a gym needs, so their answer is kept until the gym changes something.
+  const [all, periods, everyPaid] = await cache.through(`records:${account._id}`, CACHE_SECONDS,
+    () => Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id }))));
   const customers = all.filter(live), here = new Set(customers.map((c) => c._id));
   const paid = everyPaid.filter((t) => here.has(t.customerId)).sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
   return { gym: account.details, sent: account.sent, deleted: all.filter((c) => c.deletedAt).map((c) => ({ id: c._id, name: c.name, phone: c.phone, deletedAt: c.deletedAt })),
@@ -167,10 +171,12 @@ async function purgeMember(gymId, id) {
   await db.remove('customers', { _id: id, gymId });
   await db.remove('memberships', { gymId, customerId: id });
   await db.remove('transactions', { gymId, customerId: id });
+  await cache.drop(`records:${gymId}`);
 }
 async function purgeGym(id) {
   for (const name of ['sessions', 'backups', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
   await db.remove('gyms', { _id: id });
+  await cache.drop(`records:${id}`);
 }
 
 // ---- backups: once a day, everything each gym holds, compressed, kept for BACKUP_DAYS days
@@ -627,7 +633,7 @@ module.exports = { start, runReminders, daily };
 if (require.main === module) {
   start(Number(process.env.PORT) || 3000).then(
     (server) => {
-      console.log(`GymSaathi is running at http://localhost:${server.address().port} (${db.usingMongo ? 'MongoDB' : 'files in ' + db.DATA_DIR}; WhatsApp reminders ${wa.enabled() ? `go out by themselves from ${SEND_FROM} o'clock` : 'are sent by a tap'})`);
+      console.log(`GymSaathi is running at http://localhost:${server.address().port} (${db.usingMongo ? 'MongoDB' : 'files in ' + db.DATA_DIR}; cache in ${cache.usingRedis ? 'Redis' : 'memory'}; WhatsApp reminders ${wa.enabled() ? `go out by themselves from ${SEND_FROM} o'clock` : 'are sent by a tap'})`);
       startReminders();
     },
     (e) => { console.error(e.message); process.exit(1); },

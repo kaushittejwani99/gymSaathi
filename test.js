@@ -36,6 +36,27 @@ function coreChecks() {
 
 const MONGO = process.argv[2] === 'mongo';
 
+// The cache keeps an answer until it is dropped or its time is up, and never keeps a failure or an answer that a
+// change has overtaken.
+async function cacheChecks() {
+  const cache = require('./lib/cache');
+  let reads = 0;
+  const load = async () => ++reads;
+  assert.deepEqual([await cache.through('k', 60, load), await cache.through('k', 60, load), reads], [1, 1, 1]);
+  await cache.drop('k');
+  assert.deepEqual([await cache.through('k', 60, load), reads], [2, 2]);
+  assert.deepEqual([await cache.through('gone', 0, async () => ({ a: [1] })), await new Promise((r) => setTimeout(r, 5)), await cache.through('gone', 60, async () => 'fresh')], [{ a: [1] }, undefined, 'fresh']);
+  // A read that began before a change does not put its old answer back after it
+  let finish;
+  const slow = cache.through('s', 60, () => new Promise((r) => { finish = () => r('old'); }));
+  await new Promise((r) => setImmediate(r));
+  await cache.drop('s');
+  finish();
+  assert.deepEqual([await slow, await cache.through('s', 60, async () => 'new')], ['old', 'new']);
+  await assert.rejects(cache.through('f', 60, async () => { throw new Error('database down'); }));
+  assert.equal(await cache.through('f', 60, async () => 'up again'), 'up again');
+}
+
 async function apiChecks() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gymsaathi-test-'));
   // Set before the server loads .env: what is already set wins, so nothing in .env can steer the test
@@ -110,6 +131,21 @@ async function apiChecks() {
     data = await ok(gym('GET', '/api/data'));
     assert.deepEqual(G.reminders({ gym: data.gym, members: data.members, sent: { [today]: data.sent } }, today).map((r) => [r.type, r.name]), [['fees', 'Rahul Sharma']]);
     assert.equal(await status(gym('POST', '/api/members', { name: 'Twin', phone: '+91 98290-11111', months: 1 })), 409); // the same mobile number
+    // A gym's page reads its three lists once and then from the cache, until the gym changes something
+    const realFind = db.find, asked = [];
+    db.find = (name, ...rest) => { asked.push(name); return realFind(name, ...rest); };
+    const lists = () => asked.splice(0).filter((name) => ['customers', 'memberships', 'transactions'].includes(name)).length;
+    try {
+      await ok(gym('GET', '/api/data'));
+      lists();
+      await ok(gym('GET', '/api/data'));
+      await ok(gym('POST', '/api/chat', { question: 'किसकी फीस बाकी है?', quick: true }));
+      assert.equal(lists(), 0);
+      const paidOne = await ok(gym('POST', `/api/members/${rahul.id}/pay`, { amount: 1 }));
+      lists();
+      assert.deepEqual([G.due((await ok(gym('GET', '/api/data'))).members.find((m) => m.id === rahul.id)), lists()], [8699, 3]);
+      await ok(gym('DELETE', `/api/payments/${(await db.find('transactions', { customerId: paidOne.id }))[0]._id}`));
+    } finally { db.find = realFind; }
     assert.deepEqual([await status(gym('POST', '/api/members', { name: 'No Plan', phone: '9829011113', months: 0 })), await status(gym('POST', '/api/members', { name: 'Long', phone: '9829011113', months: 37 })),
       await status(gym('POST', '/api/members', { name: 'Bad', phone: '12345', months: 1 }))], [400, 400, 400]);
     // A correction changes who the member is, never the period they bought
@@ -406,6 +442,8 @@ async function apiChecks() {
 (async () => {
   coreChecks();
   console.log('ok  dates, fees and reminders');
+  await cacheChecks();
+  console.log('ok  cache');
   await apiChecks();
   console.log(`ok  api (${MONGO ? 'MongoDB' : 'files'})`);
   if (MONGO) process.exit(0); // the database connection would keep the process open

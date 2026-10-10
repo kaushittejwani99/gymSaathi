@@ -54,6 +54,16 @@ node test.js mongo
 
 runs the same checks on the MongoDB named in `.env`, in a separate database (`gymsaathi_test`) that is deleted at the end. Run it once after you set `MONGODB_URI`, to know the database works.
 
+## The cache
+
+A gym's members, memberships and payments are read from the database once and then kept for up to five minutes, until that gym changes something. Pages open faster and the database is asked less.
+
+- With nothing set, the copies live in the server's own memory. This is right for one server and needs no setup.
+- With `REDIS_URL` set, they live in Redis. Use this only when more than one copy of the server runs, so that they share one cache. Members' details then sit in that Redis too, so use one you trust.
+- If Redis cannot be reached, the app carries on and reads the database.
+
+Sign-ins and gym accounts are never cached.
+
 ## If the database is lost
 
 The daily backups live in the same database as the data, so they do not help if the database itself is lost. For that, press **Download backup** on the Accounts page now and then and keep the file somewhere else. To put such a file back:
@@ -152,6 +162,7 @@ Good to know:
 | `lib/core.js` | dates, fees, membership status, reminder rules and message text (shared with the browser) |
 | `lib/ai.js` | the registration talk and the question answers |
 | `lib/db.js` | storage: the six collections, as files or in MongoDB |
+| `lib/cache.js` | the cache: in memory, or in Redis |
 | `lib/xlsx.js` | reading an Excel file's first sheet |
 | `restore.js` | putting a downloaded backup back |
 | `lib/whatsapp.js` | sending a template message through Meta's WhatsApp Cloud API |
