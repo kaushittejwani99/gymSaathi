@@ -12,8 +12,10 @@ if (fs.existsSync(path.join(ROOT, '.env'))) process.loadEnvFile(path.join(ROOT, 
 const G = require('./lib/core');
 const db = require('./lib/db');
 const ai = require('./lib/ai');
+const wa = require('./lib/whatsapp');
 
 const MAX_BODY = 256 * 1024;
+const SEND_FROM = 6, SEND_TILL = 21; // reminders go out by themselves from 6 in the morning, and never at night
 const TRIAL_MONTHS = 1, PRICE = 999; // a gym's first month from its first sign-in is free; after that it pays PRICE a month
 const OWNER_DAYS = 30;               // how long the owner of the service stays signed in
 const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'";
@@ -148,6 +150,45 @@ async function loadGym(account) {
 const pay = (gymId, customerId, name, membershipId, amt, mode, date) => amt > 0 && db.insert('transactions',
   { _id: newId(), gymId, customerId, membershipId, name, amount: amt, mode: MODES.includes(mode) ? mode : 'Cash', date, createdAt: stamp() });
 
+// Notes that a reminder went out today, so it is not sent or offered again. Older days are dropped.
+async function markSent(gymId, today, key) {
+  const { sent } = await gymById(gymId);
+  await db.update('gyms', { _id: gymId }, { sent: { [today]: { ...(sent[today] || {}), [key]: true } } });
+}
+
+// Sends today's reminders of every gym on WhatsApp. A gym that is switched off or whose time is over sends nothing.
+// One that fails stays on that gym's dashboard, where it can still be sent by a tap.
+async function runReminders(today = G.todayISO()) {
+  const now = stamp(), count = { sent: 0, failed: 0 };
+  for (const account of await db.find('gyms')) {
+    if (account.disabled || !(account.validTill > now)) continue;
+    for (const r of G.reminders(await loadGym(account), today)) {
+      try {
+        await wa.send(r.phone, G.TEMPLATES[r.type].name, r.params);
+        await write(() => markSent(account._id, today, `${r.memberId}:${r.type}`))({ gymId: account._id });
+        count.sent++;
+      } catch (e) {
+        count.failed++;
+        console.error(`WhatsApp reminder for a member of ${account.details.name} failed: ${e.message}`);
+      }
+    }
+  }
+  return count;
+}
+// Looks every minute whether today's reminders are due. A host that sleeps (a free one) sends them when it is next
+// woken, so something has to open the site a little before six: README.md says how.
+let remindedOn = '';
+function startReminders() {
+  const tick = () => {
+    const today = G.todayISO(), hour = new Date().getHours();
+    if (!wa.enabled() || remindedOn === today || hour < SEND_FROM || hour >= SEND_TILL) return;
+    remindedOn = today;
+    runReminders(today).then((c) => console.log(`WhatsApp reminders for ${today}: ${c.sent} sent, ${c.failed} failed`), (e) => console.error('WhatsApp reminders failed:', e));
+  };
+  tick();
+  setInterval(tick, 60e3).unref();
+}
+
 // What the owner may type or say about a member, apart from the plan and the money.
 async function details(b, account, selfId) {
   const t = ai.tidy(b, account.details), phone = phoneOf(b.phone);
@@ -160,7 +201,7 @@ async function details(b, account, selfId) {
 const extras = (b, last = {}) => ({ pt: b.pt === undefined ? !!last.pt : b.pt === true, diet: b.diet === undefined ? !!last.diet : b.diet === true });
 // A membership period and its fee. The fee is the gym's own price unless the owner typed another.
 function period(b, gym, today, more) {
-  const months = G.PLANS.includes(Number(b.months)) ? Number(b.months) : fail(400, 'Choose 1, 3, 6 or 12 months.');
+  const months = G.okMonths(Number(b.months)) ? Number(b.months) : fail(400, 'The months must be a whole number from 1 to 36.');
   const start = b.start ? dateOf(b.start, 'The start date') : today;
   const fee = b.fee === undefined || b.fee === '' ? G.feeFor(gym, { months, ...more }) : amount(b.fee, 'The fee');
   const paid = amount(b.paid || 0, 'The amount paid');
@@ -213,7 +254,7 @@ const either = {
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
     if (!account) return { user, gym: null, members: [], payments: [], sent: {}, price: PRICE, aiEnabled: ai.aiEnabled() };
     const data = await loadGym(account);
-    return { user, ...data, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, payNote: payNote(), aiEnabled: ai.aiEnabled() };
+    return { user, ...data, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
 };
 
@@ -269,8 +310,7 @@ const gymRoutes = {
   'POST /api/reminders/sent': write(async ({ body, gymId }) => {
     const today = G.todayISO(), m = await memberById(gymId, G.str(body.memberId, 40));
     if (!['fees', 'expiring', 'expired', 'welcome'].includes(body.type)) fail(400, 'Unknown reminder.');
-    const { sent } = await gymById(gymId);
-    await db.update('gyms', { _id: gymId }, { sent: { [today]: { ...(sent[today] || {}), [`${m.id}:${body.type}`]: true } } }); // older days are dropped
+    await markSent(gymId, today, `${m.id}:${body.type}`);
   }),
 
   // The assistant. Each is limited per gym, since every call may reach the AI.
@@ -388,11 +428,14 @@ async function start(port) {
   return new Promise((resolve, reject) => { server.once('error', reject).listen(port, () => resolve(server)); });
 }
 
-module.exports = { start };
+module.exports = { start, runReminders };
 
 if (require.main === module) {
   start(Number(process.env.PORT) || 3000).then(
-    (server) => console.log(`GymSaathi is running at http://localhost:${server.address().port} (${db.usingMongo ? 'MongoDB' : 'files in ' + db.DATA_DIR})`),
+    (server) => {
+      console.log(`GymSaathi is running at http://localhost:${server.address().port} (${db.usingMongo ? 'MongoDB' : 'files in ' + db.DATA_DIR}; WhatsApp reminders ${wa.enabled() ? `go out by themselves from ${SEND_FROM} o'clock` : 'are sent by a tap'})`);
+      startReminders();
+    },
     (e) => { console.error(e.message); process.exit(1); },
   );
 }

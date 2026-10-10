@@ -14,15 +14,22 @@ function coreChecks() {
   const gym = { name: 'Fit Zone', owner: 'Vikram', price1: 1000, price3: 2700, price12: 9000, ptPrice: 2000, dietPrice: 500 };
   // A price left empty is the monthly price times the months; a trainer and a diet plan are charged per month
   assert.deepEqual([G.feeFor(gym, { months: 1 }), G.feeFor(gym, { months: 3, pt: true }), G.feeFor(gym, { months: 6 }), G.feeFor(gym, { months: 12, pt: true, diet: true })], [1000, 8700, 6000, 39000]);
-  const m = (more) => ({ id: 'm1', name: 'Rahul', phone: '9829011111', start: '2026-10-01', end: '2026-10-31', months: 1, fee: 1000, paid: 1000, ...more });
+  // Any whole number of months can be bought; a length the gym has no price for costs the monthly price times the months
+  assert.deepEqual([G.okMonths(9), G.okMonths(0), G.okMonths(37), G.okMonths(2.5), G.feeFor(gym, { months: 9 }), G.planLabel(9), G.planLabel(1), G.planLabel(12)], [true, false, false, false, 9000, '9 महीने', '1 महीना', '1 साल']);
+  const m = (more) => ({ id: 'm1', name: 'Rahul', phone: '9829011111', joinedAt: '2026-04-01', start: '2026-10-01', end: '2026-10-31', months: 1, fee: 1000, paid: 1000, ...more });
   const kinds = (member, day, sent) => G.reminders({ gym, members: [member], sent: sent || {} }, day).map((r) => r.type);
   assert.deepEqual([G.statusOf(m(), '2026-10-20'), G.statusOf(m(), '2026-10-25'), G.statusOf(m(), '2026-11-01')], ['active', 'expiring', 'expired']);
-  // Fees are asked for every day; the end of a membership on its last days and on days 1, 3, 7 and 15 after it
-  assert.deepEqual([kinds(m(), '2026-10-20'), kinds(m({ paid: 400 }), '2026-10-20'), kinds(m(), '2026-10-28'), kinds(m(), '2026-10-31'), kinds(m(), '2026-11-01'), kinds(m(), '2026-11-02'), kinds(m(), '2026-11-07')],
-    [[], ['fees'], ['expiring'], ['expiring'], ['expired'], [], ['expired']]);
+  // Fees are asked for every day; the end of a membership every day from five days before it to five days after
+  assert.deepEqual([kinds(m(), '2026-10-20'), kinds(m({ paid: 400 }), '2026-10-20'), kinds(m(), '2026-10-25'), kinds(m(), '2026-10-26'), kinds(m(), '2026-10-31'), kinds(m(), '2026-11-01'), kinds(m(), '2026-11-05'),
+    kinds(m(), '2026-11-06'), kinds(m({ paid: 400 }), '2026-11-06')], [[], ['fees'], [], ['expiring'], ['expiring'], ['expired'], ['expired'], [], ['fees']]);
   assert.deepEqual(kinds(m({ paid: 400 }), '2026-10-20', { '2026-10-20': { 'm1:fees': true } }), []);
-  const text = G.messages(gym, m({ paid: 400 }));
-  assert.ok(text.fees.includes('₹600') && text.fees.includes('Fit Zone') && text.expiring.includes('31 Oct 2026') && text.expiring.includes('1 साल ₹9,000'), text.fees + text.expiring);
+  // Each reminder says when the member joined and what length they took. It is a fixed sentence with numbered blanks,
+  // and the values for the blanks are what an automatic send hands to WhatsApp
+  const text = G.messages(gym, m({ paid: 400, months: 6 })), [fees] = G.reminders({ gym, members: [m({ paid: 400, months: 6 })], sent: {} }, '2026-10-20');
+  assert.equal(text.fees, 'नमस्ते Rahul जी, Fit Zone की ओर से सूचना। आपने 1 Apr 2026 को जिम जॉइन किया था और 6 महीने की मेंबरशिप ली है, जो 31 Oct 2026 तक है। आपकी फीस ₹600 बाकी है। कृपया जल्द जमा करवा दें। भुगतान: जिम काउंटर पर। धन्यवाद।');
+  assert.deepEqual([fees.params, fees.text], [['Rahul', 'Fit Zone', '1 Apr 2026', '6 महीने', '31 Oct 2026', '₹600', 'जिम काउंटर पर'], text.fees]);
+  assert.ok(text.expiring.includes('6 महीने की मेंबरशिप 31 Oct 2026 को खत्म हो रही है') && text.expired.includes('खत्म हो चुकी है') && !/\{\{/.test(text.fees + text.expiring + text.expired), text.expiring);
+  for (const t of Object.values(G.TEMPLATES)) assert.deepEqual(t.body.match(/\{\{\d\}\}/g), t.body.match(/\{\{\d\}\}/g).map((x, i) => `{{${i + 1}}}`)); // blanks are numbered in order
   assert.ok(G.waLink('+91 98290-11111', 'नमस्ते').startsWith('https://wa.me/919829011111?text=%E0%A4'));
 }
 
@@ -31,7 +38,7 @@ const MONGO = process.argv[2] === 'mongo';
 async function apiChecks() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gymsaathi-test-'));
   // Set before the server loads .env: what is already set wins, so nothing in .env can steer the test
-  Object.assign(process.env, { DATA_DIR: dir, ADMIN_EMAIL: 'owner', ADMIN_PASSWORD: 'owner-password', GEMINI_API_KEY: '', GEMINI_MODEL: '', PAY_NOTE: '', TRUST_PROXY: '', MONGODB_DB: 'gymsaathi_test' });
+  Object.assign(process.env, { DATA_DIR: dir, ADMIN_EMAIL: 'owner', ADMIN_PASSWORD: 'owner-password', GEMINI_API_KEY: '', GEMINI_MODEL: '', PAY_NOTE: '', WHATSAPP_TOKEN: '', WHATSAPP_PHONE_ID: '', WHATSAPP_API_VERSION: '', TRUST_PROXY: '', MONGODB_DB: 'gymsaathi_test' });
   if (!MONGO) process.env.MONGODB_URI = '';
   const srv = await require('./server').start(0), db = require('./lib/db');
   assert.equal(db.usingMongo, MONGO, MONGO ? 'Put MONGODB_URI in .env first.' : '');
@@ -96,7 +103,8 @@ async function apiChecks() {
     let data = await ok(gym('GET', '/api/data'));
     assert.deepEqual(G.reminders({ gym: data.gym, members: data.members, sent: { [today]: data.sent } }, today).map((r) => [r.type, r.name]), [['fees', 'Rahul Sharma']]);
     assert.equal(await status(gym('POST', '/api/members', { name: 'Twin', phone: '+91 98290-11111', months: 1 })), 409); // the same mobile number
-    assert.deepEqual([await status(gym('POST', '/api/members', { name: 'No Plan', phone: '9829011113', months: 2 })), await status(gym('POST', '/api/members', { name: 'Bad', phone: '12345', months: 1 }))], [400, 400]);
+    assert.deepEqual([await status(gym('POST', '/api/members', { name: 'No Plan', phone: '9829011113', months: 0 })), await status(gym('POST', '/api/members', { name: 'Long', phone: '9829011113', months: 37 })),
+      await status(gym('POST', '/api/members', { name: 'Bad', phone: '12345', months: 1 }))], [400, 400, 400]);
     // A correction changes who the member is, never the period they bought
     const fixed = await ok(gym('PUT', `/api/members/${rahul.id}`, { name: 'Rahul Sharma', phone: '9829011111', age: 26, pt: false, months: 12 }));
     assert.deepEqual([fixed.age, fixed.pt, fixed.months, fixed.fee], [26, true, 3, 8700]);
@@ -174,6 +182,36 @@ async function apiChecks() {
     assert.equal((await other('GET', '/api/data'))[1].error, 'Your plan is over. Pay ₹999 to start the service again.');
     assert.equal(await status(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 5 })), 400);
 
+    // With WhatsApp set up the day's reminders go out by themselves: one template message each, with the values for
+    // its blanks. One that went is not sent again; one that failed stays for the next run, and for a tap. Meta is stubbed.
+    const amit = await ok(gym('POST', '/api/members', { name: 'Amit Soni', phone: '9829011114', months: 9 })); // 9 months, nothing paid
+    assert.deepEqual([amit.months, amit.fee, amit.end], [9, 9000, G.endOf(today, 9)]);
+    await ok(gym('POST', '/api/members', { name: 'Neha Jain', phone: '9829011115', months: 1 }));
+    const posted = [], real = global.fetch;
+    let refuse = '919829011115';
+    global.fetch = (url, init) => {
+      if (!String(url).startsWith('https://graph.facebook.com/')) return real(url, init);
+      const sent = JSON.parse(init.body);
+      posted.push([url, init.headers.Authorization, sent]);
+      return Promise.resolve(Response.json(sent.to === refuse ? { error: { message: 'not on WhatsApp' } } : { messages: [{ id: 'x' }] }, { status: sent.to === refuse ? 400 : 200 }));
+    };
+    Object.assign(process.env, { WHATSAPP_TOKEN: 'test-token', WHATSAPP_PHONE_ID: '111' });
+    try {
+      const { runReminders } = require('./server');
+      // Rahul's fees reminder went out by a tap earlier today, and the gym whose time is over sends nothing
+      assert.deepEqual(await runReminders(today), { sent: 1, failed: 1 });
+      const [url, auth, first] = posted[0];
+      assert.deepEqual([url, auth, first.to, first.type, first.template.name, first.template.language.code], ['https://graph.facebook.com/v22.0/111/messages', 'Bearer test-token', '919829011114', 'template', 'gs_fees_pending', 'hi']);
+      assert.deepEqual(first.template.components[0].parameters.map((p) => p.text), ['Amit Soni', 'Fit Zone', G.fmtDate(today), '9 महीने', G.fmtDate(amit.end), '₹9,000', 'जिम काउंटर पर']);
+      data = await ok(gym('GET', '/api/data'));
+      assert.deepEqual([Object.keys(data.sent).sort(), data.autoWhatsApp], [[`${amit.id}:fees`, `${rahul.id}:fees`].sort(), true]);
+      refuse = '';
+      assert.deepEqual([await runReminders(today), await runReminders(today), posted.length], [{ sent: 1, failed: 0 }, { sent: 0, failed: 0 }, 3]);
+    } finally {
+      process.env.WHATSAPP_TOKEN = '';
+      global.fetch = real;
+    }
+
     // Passwords: the gym changes its own; the owner resets one and switches a gym off
     assert.equal(await status(gym('POST', '/api/auth/password', { current: 'wrong-one', password: 'second-password' })), 400);
     await ok(gym('POST', '/api/auth/password', { current: 'first-password', password: 'second-password' }));
@@ -182,7 +220,7 @@ async function apiChecks() {
     assert.deepEqual([await status(gym('GET', '/api/data')), await status(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'second-password' }))], [401, 403]);
     // Deleting a member takes their periods and payments along; the owner signs out
     await ok(owner('DELETE', `/api/members/${rahul.id}?gym=${seen.id}`));
-    assert.deepEqual([(await db.find('memberships', { gymId: seen.id })).length, (await db.find('transactions', { gymId: seen.id })).length], [0, 0]);
+    assert.deepEqual([(await db.find('memberships', { customerId: rahul.id })).length, (await db.find('transactions', { customerId: rahul.id })).length, (await db.find('memberships', { gymId: seen.id })).length], [0, 0, 2]);
     await ok(owner('POST', '/api/auth/logout'));
     assert.equal(await status(owner('GET', '/api/admin/gyms')), 401);
     // One file per collection, and a write without the JSON content type is refused

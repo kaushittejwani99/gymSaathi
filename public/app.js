@@ -225,7 +225,8 @@ views.dashboard = () => {
       ${kpi('Fees pending', money(owed), `${ms.filter((m) => G.due(m) > 0).length} members`, owed > 0)}
       ${kpi('Collected this month', money(month), 'payments received')}</div>
     <section class="card">
-      <div class="card-head"><h2>Today's WhatsApp reminders (${todo.length})</h2><span class="hint">Press a button, WhatsApp opens with the message typed in, press Send.</span></div>
+      <div class="card-head"><h2>Today's WhatsApp reminders (${todo.length})</h2><span class="hint">${S.autoWhatsApp ? 'These go out by themselves every morning at 6. What is listed has not gone yet: press to send it yourself.'
+        : 'Press a button, WhatsApp opens with the message typed in, press Send.'}</span></div>
       ${todo.length ? table(['Member', 'Reminder', ''], todo.map((r) => { const m = byId(ms, r.memberId); return `<tr>
         <td><a href="#/members/${esc(m.id)}">${esc(m.name)}</a><br><span class="muted">${esc(m.phone)}</span></td>
         <td>${WHAT[r.type]}${r.type === 'fees' ? `: ${money(G.due(m))}` : `: ${esc(G.fmtDate(m.end))}`}</td>
@@ -247,7 +248,9 @@ function memberRows() {
     <td>${planName(m.months)}${m.pt ? ' + trainer' : ''}${m.diet ? ' + diet' : ''}</td><td>${esc(G.fmtDate(m.end))}</td>
     <td class="num ${G.due(m) ? 'low' : ''}">${G.due(m) ? money(G.due(m)) : ''}</td><td>${pill(m)}</td></tr>`));
 }
-const plansOf = () => G.PLANS.filter((p) => p === 1 || G.num(S.gym[`price${p}`])).map((p) => [p, `${planName(p)}: ${G.money(G.planPrice(S.gym, p))}`]);
+// Any number of months can be typed. The gym's own prices are shown beside the box; another length costs the monthly price times the months.
+const monthsField = (months) => field(`Months (${G.PLANS.filter((p) => p === 1 || G.num(S.gym[`price${p}`])).map((p) => `${p}: ${G.money(G.planPrice(S.gym, p))}`).join(', ')})`,
+  input('months', months || 1, `${NUM} min="1" max="36" required`));
 const MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Other'];
 // The typed form: for a correction, or where speaking is not possible. `plan` adds the membership and money fields.
 const memberForm = (m, plan) => `<div class="grid">
@@ -261,7 +264,7 @@ const memberForm = (m, plan) => `<div class="grid">
   ${field('Health problem, injury', input('health', m.health, 'maxlength="150"'))}
   ${field('Batch', input('batch', m.batch, 'maxlength="40" placeholder="Morning or Evening"'))}
   ${plan ? `<div class="row">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
-  ${field('Plan', `<select name="months">${opts(plansOf(), m.months || 1)}</select>`)}
+  ${monthsField(m.months)}
   ${field('Starts on', `<input type="date" name="start" value="${esc(m.start || today())}">`)}
   ${field('Fee (leave empty for the gym\'s price)', input('fee', m.fee == null ? '' : m.fee, NUM))}
   ${field('Paid now', input('paid', m.paid || '', NUM))}
@@ -354,7 +357,7 @@ Object.assign(actions, {
   renew(el) {
     const m = byId(S.members, el.dataset.id), t = today(), start = m.end >= t ? G.addDays(m.end, 1) : t;
     openDialog(dialogForm(`Renew ${m.name}`, 'renew-save', m.id, `<div class="grid">
-      ${field('Plan', `<select name="months">${opts(plansOf(), m.months)}</select>`)}
+      ${monthsField(m.months)}
       ${field('Starts on', `<input type="date" name="start" value="${esc(start)}">`)}
       <div class="row span2">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
       ${field('Paid now', input('paid', '', NUM))}${field('Paid by', `<select name="mode">${opts(MODES, 'Cash')}</select>`)}</div>
@@ -561,10 +564,7 @@ async function loadAccounts() { accounts = await api('GET', '/api/admin/gyms'); 
 const daysLeft = (a) => (a.validTill ? Math.ceil((Date.parse(a.validTill) - Date.now()) / 864e5) : 99);
 // A WhatsApp message to a gym whose time is ending or over, asking for the month's payment.
 const askGym = (a) => { const d = daysLeft(a), kind = a.paidMonths ? 'प्लान' : 'फ्री ट्रायल', on = G.fmtDate(G.todayISO(new Date(a.validTill)));
-  return G.waLink(a.phone, `नमस्ते 🙏
-${a.gym} का GymSaathi ${kind} ${on} को ${d > 0 ? 'खत्म हो रहा है' : 'खत्म हो चुका है'}।
-सेवा चालू रखने के लिए ${G.money(S.price)} जमा करवा दें।
-धन्यवाद।`); };
+  return G.waLink(a.phone, `नमस्ते 🙏\n${a.gym} का GymSaathi ${kind} ${on} को ${d > 0 ? 'खत्म हो रहा है' : 'खत्म हो चुका है'}।\nसेवा चालू रखने के लिए ${G.money(S.price)} जमा करवा दें।\nधन्यवाद।`); };
 const when = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '');
 // Where a gym stands: switched off, never signed in, in its free month, paid up, or out of time.
 function planPill(a) {

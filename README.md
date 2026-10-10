@@ -7,9 +7,9 @@ It costs nothing to run: free hosting, a free database and a free AI key are eno
 ## What it does
 
 - **New member by voice.** Press one button. The assistant asks in Hindi, like a gym owner would: name, mobile number, gender, age, weight, height, goal, any health problem, batch, personal trainer or not, diet plan or not, how many months, and how much was paid today. It speaks each question and listens for the answer. Say "skip" or "pata nahi" for anything the member does not want to tell.
-- **Fee worked out for you.** The gym's own prices (1 month, 3 months, 6 months, 1 year, trainer, diet) are filled in once on Settings. The assistant adds them up and tells the fee.
+- **Fee worked out for you.** The gym's own prices (1 month, 3 months, 6 months, 1 year, trainer, diet) are filled in once on Settings. The assistant adds them up and tells the fee. A membership can be any number of months from 1 to 36; a length with no price of its own (9 months, say) costs the monthly price times the months.
 - **Fees pending.** A member who joins and says "I will pay in a day or two" is saved with the fee pending. They appear on the dashboard every day until the fee is paid.
-- **WhatsApp reminders.** The dashboard lists today's reminders: fees pending (every day), membership ending (last 4 days), membership ended (days 1, 3, 7 and 15 after). One tap opens WhatsApp with the message already written in Hindi, with the gym's name, the amount and the UPI ID. You press Send.
+- **WhatsApp reminders.** Fees pending: every day until paid. Membership ending: every day from 5 days before the last day. Membership ended: every day for 5 days after. Each message is in Hindi and says the gym's name, the day the member joined, the length of the membership they took and its last day; the fees one adds the amount and the UPI ID. The dashboard lists today's reminders and one tap opens WhatsApp with the message written. With WhatsApp set up (below) they go out by themselves at 6 every morning.
 - **Welcome message** on joining, with the plan, dates and fee.
 - **Ask anything.** "Kiski fees baaki hai?", "Is mahine kitna paisa aaya?", "Rahul ki membership kab khatam hogi?" The assistant answers from the gym's own members and reads the answer aloud.
 - **Payments.** One tap for "got the full amount in cash" or by UPI, or enter a part payment. Renew a membership in one tap.
@@ -82,9 +82,47 @@ Without `MONGODB_URI` the same five are JSON files in `DATA_DIR`.
 
 Never put these values in the code or in a file you upload. Without `MONGODB_URI` the data is kept in files, and a free host wipes those on every restart.
 
+## WhatsApp reminders that send themselves
+
+Without this, the gym owner taps Send for each reminder. With it, the server sends them at 6 in the morning through Meta's own WhatsApp Cloud API. All gyms' messages go from one WhatsApp number of yours; each message names the gym.
+
+There is no monthly fee. Meta charges for each message delivered: about ₹0.12 for a reminder of this kind in India (check Meta's current rate card). No members, no cost.
+
+1. **A phone number** that is not on WhatsApp now, and can get an SMS or a call. Once it is used here it cannot be used in the normal WhatsApp app.
+2. **Create the app.** At developers.facebook.com: My Apps, Create App, type Business, then add the WhatsApp product. This also makes your Meta Business account and WhatsApp Business account.
+3. **Add your number.** WhatsApp, API Setup: add the phone number, verify it by OTP, give it a display name (GymSaathi). Copy the **Phone number ID** shown there.
+4. **Add a payment method** in WhatsApp Manager, under Payment settings.
+5. **Create three message templates.** WhatsApp Manager, Message templates, Create. For each: category **Utility**, language **Hindi**, the exact name below, and the exact body below. Give any sample values it asks for. Approval takes minutes to a few hours.
+
+   `gs_fees_pending`
+   ```
+   नमस्ते {{1}} जी, {{2}} की ओर से सूचना। आपने {{3}} को जिम जॉइन किया था और {{4}} की मेंबरशिप ली है, जो {{5}} तक है। आपकी फीस {{6}} बाकी है। कृपया जल्द जमा करवा दें। भुगतान: {{7}}। धन्यवाद।
+   ```
+   `gs_membership_expiring`
+   ```
+   नमस्ते {{1}} जी, {{2}} की ओर से सूचना। आपने {{3}} को जिम जॉइन किया था। आपकी {{4}} की मेंबरशिप {{5}} को खत्म हो रही है। बिना रुकावट जिम जारी रखने के लिए समय पर रिन्यू करवा लें। धन्यवाद।
+   ```
+   `gs_membership_expired`
+   ```
+   नमस्ते {{1}} जी, {{2}} की ओर से सूचना। आपने {{3}} को जिम जॉइन किया था। आपकी {{4}} की मेंबरशिप {{5}} को खत्म हो चुकी है। जिम जारी रखने के लिए कृपया रिन्यू करवा लें। धन्यवाद।
+   ```
+   The blanks are: 1 member's name, 2 gym's name, 3 joining date, 4 length of the membership, 5 its last day, 6 fee pending, 7 where to pay.
+6. **Make a token that does not expire.** Business settings, Users, System users: add one as Admin, give it the app and the WhatsApp account with full control, then Generate token with `whatsapp_business_messaging` and `whatsapp_business_management`, expiry Never.
+7. **Set these on the host** (Render, Environment): `WHATSAPP_TOKEN` (the token), `WHATSAPP_PHONE_ID` (from step 3), and `TZ` = `Asia/Kolkata` so that 6 o'clock is 6 in India.
+8. **Wake the free host before 6.** A free Render service sleeps, and a sleeping server sends nothing. At cron-job.org (free) make a job that opens your site's address every day at 5:57 and 6:03, time zone Asia/Kolkata. A server woken later in the day sends then, up to 9 at night.
+
+Good to know:
+
+- Until Meta has verified your business you can message 250 different people a day. Verify it in Business settings to raise that.
+- Members must have agreed to get WhatsApp messages from the gym. Ask at joining.
+- A reminder that could not be sent (number not on WhatsApp, template not approved yet) stays on that gym's dashboard, where it can be sent by a tap. The server log says why it failed.
+- A gym that is switched off, or whose time is over, sends nothing.
+- Replies from members come to your number, not to the gym.
+- The welcome message is always sent by a tap.
+
 ## What "free" means here
 
-- **WhatsApp messages are sent by a tap, not on their own.** Sending automatically needs the WhatsApp Business API, which charges per message. Here the owner opens the dashboard once a day and taps Send for each reminder; a sent reminder leaves the list for that day.
+- **WhatsApp messages are sent by a tap unless you set up the section above.** Tapping costs nothing. Sending by themselves costs what Meta charges per message.
 - **A free Render service sleeps** after 15 minutes without use. The first page after that takes up to a minute to open.
 - **The free Gemini key has a daily limit.** When it is used up, or no key is set, the assistant still works: it then reads one answer per question instead of understanding a whole sentence.
 - **MongoDB Atlas free tier** holds 512 MB, enough for many hundreds of gyms.
@@ -97,5 +135,6 @@ Never put these values in the code or in a file you upload. Without `MONGODB_URI
 | `lib/core.js` | dates, fees, membership status, reminder rules and message text (shared with the browser) |
 | `lib/ai.js` | the registration talk and the question answers |
 | `lib/db.js` | storage: the five collections, as files or in MongoDB |
+| `lib/whatsapp.js` | sending a template message through Meta's WhatsApp Cloud API |
 | `public/` | the pages |
 | `test.js` | the checks |
