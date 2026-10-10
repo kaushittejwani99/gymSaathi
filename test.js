@@ -239,6 +239,7 @@ async function apiChecks() {
     await ok(ox('POST', '/api/auth/login', { email: 'oxfit', password: 'first-password' }));
     await ok(ox('POST', '/api/seed'));
     await ok(ox('POST', '/api/members', { name: 'Own Member', phone: '9829011199', months: 1 }));
+    await db.update('customers', { gymId: third, phone: '9829011101' }, { sample: false }); // one loaded before sample members were marked
     assert.deepEqual([(await ok(ox('GET', '/api/data'))).members.length, (await ok(ox('DELETE', '/api/sample'))).removed, (await ok(ox('GET', '/api/data'))).members.map((m) => m.name),
       (await db.find('memberships', { gymId: third })).length, (await db.find('transactions', { gymId: third })).length], [9, 8, ['Own Member'], 1, 0]);
     // The owner of the service deletes a gym with everything it holds

@@ -125,13 +125,20 @@ const write = (fn) => (c) => {
   return run;
 };
 
+// The members that 'Load sample members' makes: name, mobile, months, days since joining, fee, paid.
+const SAMPLE = [['Rahul Sharma', '9829011101', 3, -80, 2700, 2700], ['Priya Jain', '9829011102', 1, -27, 1000, 1000], ['Amit Soni', '9829011103', 1, -2, 1000, 0],
+  ['Neha Agarwal', '9829011104', 12, -200, 9000, 5000], ['Suresh Mali', '9829011105', 1, -40, 1000, 1000], ['Kavita Rathore', '9829011106', 3, -10, 2700, 2700],
+  ['Deepak Kothari', '9829011107', 1, 0, 3000, 1000], ['Sunita Vyas', '9829011108', 1, -29, 1000, 1000]];
+// A sample member is marked as one. Those made before the mark existed are known by their name and number.
+const isSample = (c) => c.sample === true || SAMPLE.some(([name, phone]) => c.name === name && c.phone === phone);
+
 // A member as the screens and the reminders read one: who they are, the period running now, what it cost with
 // anything still owed from earlier periods, and what has been paid since it began. So fee - paid is what they owe.
 function memberOf(c, periods, paid) {
   periods.sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
   const now = periods.at(-1), paidNow = sum(paid.filter((t) => t.membershipId === now._id), 'amount');
   const { _id, gymId, ...who } = c;
-  return { id: _id, ...who, membershipId: now._id, pt: now.pt, diet: now.diet, months: now.months, start: now.start, end: now.end,
+  return { id: _id, ...who, sample: isSample(c), membershipId: now._id, pt: now.pt, diet: now.diet, months: now.months, start: now.start, end: now.end,
     fee: sum(periods, 'fee') - sum(paid, 'amount') + paidNow, paid: paidNow, history: periods.slice(0, -1).map(({ months, start, end, fee }) => ({ months, start, end, fee })) };
 }
 async function memberById(gymId, id) {
@@ -305,7 +312,7 @@ const gymRoutes = {
   }),
   // The sample members that 'Load sample members' made, all at once.
   'DELETE /api/sample': write(async ({ gymId }) => {
-    const sample = await db.find('customers', { gymId, sample: true });
+    const sample = (await db.find('customers', { gymId })).filter(isSample);
     for (const c of sample) await dropMember(gymId, c._id);
     return { removed: sample.length };
   }),
@@ -361,10 +368,7 @@ const gymRoutes = {
     const today = G.todayISO(), d = account.details;
     await db.update('gyms', { _id: gymId }, { details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
       price1: d.price1 || 1000, price3: d.price3 || 2700, price12: d.price12 || 9000, ptPrice: d.ptPrice || 2000, dietPrice: d.dietPrice || 500 } });
-    const rows = [['Rahul Sharma', '9829011101', 3, -80, 2700, 2700], ['Priya Jain', '9829011102', 1, -27, 1000, 1000], ['Amit Soni', '9829011103', 1, -2, 1000, 0],
-      ['Neha Agarwal', '9829011104', 12, -200, 9000, 5000], ['Suresh Mali', '9829011105', 1, -40, 1000, 1000], ['Kavita Rathore', '9829011106', 3, -10, 2700, 2700],
-      ['Deepak Kothari', '9829011107', 1, 0, 3000, 1000], ['Sunita Vyas', '9829011108', 1, -29, 1000, 1000]];
-    for (const [name, phone, months, ago, fee, paid] of rows) {
+    for (const [name, phone, months, ago, fee, paid] of SAMPLE) {
       const start = G.addDays(today, ago), id = newId(), membershipId = newId();
       await db.insert('memberships', { _id: membershipId, gymId, customerId: id, months, start, end: G.endOf(start, months), fee, pt: fee === 3000, diet: false, createdAt: stamp() });
       await db.insert('customers', { _id: id, gymId, name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', notes: '', joinedAt: start, sample: true });
