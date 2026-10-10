@@ -227,6 +227,21 @@ async function apiChecks() {
     assert.deepEqual([await status(browser()('POST', '/api/auth/login', { email: ' ox  FIT ', password: 'first-password' })), await status(browser()('POST', '/api/auth/login', { email: 'Ox Fit', password: 'wrong-password' })),
       await status(browser()('POST', '/api/auth/login', { email: 'Fit Zone', password: 'first-password' }))], [200, 401, 401]);
 
+    // Mistakes can be corrected. A payment: its amount (never to more than was owed), how it was paid and its date
+    const first = (await ok(gym('GET', '/api/data'))).payments.find((p) => p.memberId === rahul.id && p.amount === 5000);
+    assert.deepEqual([await status(gym('PUT', `/api/payments/${first.id}`, { amount: 8701 })), await status(gym('PUT', `/api/payments/${first.id}`, { amount: 0 })), await status(gym('PUT', '/api/payments/0123456789abcdef', { amount: 1 }))], [400, 400, 404]);
+    await ok(gym('PUT', `/api/payments/${first.id}`, { amount: 5200, mode: 'Cash', date: '2026-01-05' }));
+    data = await ok(gym('GET', '/api/data'));
+    assert.deepEqual([data.payments.filter((p) => p.id === first.id).map((p) => [p.amount, p.mode, p.date]), G.due(data.members.find((m) => m.id === rahul.id))], [[[5200, 'Cash', '2026-01-05']], 3500]);
+    await ok(gym('PUT', `/api/payments/${first.id}`, { amount: 5000, mode: 'UPI', date: today }));
+    // The running membership: its length, start, extras and fee. The fee cannot drop below what was already paid
+    let fixedPlan = await ok(gym('PUT', `/api/members/${amit.id}/period`, { months: 6, pt: true }));
+    assert.deepEqual([fixedPlan.months, fixedPlan.end, fixedPlan.pt, fixedPlan.fee, fixedPlan.history.length], [6, G.endOf(today, 6), true, 6 * 1000 + 6 * 2000, 0]);
+    fixedPlan = await ok(gym('PUT', `/api/members/${amit.id}/period`, { months: 6, pt: false, fee: 5500, start: G.addDays(today, 2) }));
+    assert.deepEqual([fixedPlan.fee, fixedPlan.start, fixedPlan.end, fixedPlan.pt, (await db.find('memberships', { customerId: amit.id })).length], [5500, G.addDays(today, 2), G.endOf(G.addDays(today, 2), 6), false, 1]);
+    await ok(gym('POST', `/api/members/${amit.id}/pay`, { amount: 5500 }));
+    assert.deepEqual([await status(gym('PUT', `/api/members/${amit.id}/period`, { months: 6, fee: 5000 })), await status(gym('PUT', `/api/members/${amit.id}/period`, { months: 40 }))], [400, 400]);
+
     // Mistakes can be taken back. A renewal that money was taken for stays until that payment is deleted; then the
     // period before it runs again. A member's only period cannot go this way
     const wrong = (await ok(gym('GET', '/api/data'))).payments.find((p) => p.memberId === rahul.id && p.amount === 1000);

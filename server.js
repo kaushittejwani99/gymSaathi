@@ -138,7 +138,7 @@ function memberOf(c, periods, paid) {
   periods.sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
   const now = periods.at(-1), paidNow = sum(paid.filter((t) => t.membershipId === now._id), 'amount');
   const { _id, gymId, ...who } = c;
-  return { id: _id, ...who, sample: isSample(c), membershipId: now._id, pt: now.pt, diet: now.diet, months: now.months, start: now.start, end: now.end,
+  return { id: _id, ...who, sample: isSample(c), membershipId: now._id, periodFee: now.fee, pt: now.pt, diet: now.diet, months: now.months, start: now.start, end: now.end,
     fee: sum(periods, 'fee') - sum(paid, 'amount') + paidNow, paid: paidNow, history: periods.slice(0, -1).map(({ months, start, end, fee }) => ({ months, start, end, fee })) };
 }
 async function memberById(gymId, id) {
@@ -316,10 +316,27 @@ const gymRoutes = {
     for (const c of sample) await dropMember(gymId, c._id);
     return { removed: sample.length };
   }),
+  // A payment typed in wrongly is corrected: its amount, how it was paid, its date. Never to more than was owed.
+  'PUT /api/payments/:id': write(async ({ body, gymId, id }) => {
+    const [t] = await db.find('transactions', { _id: id, gymId });
+    if (!t) fail(404, 'Payment not found.');
+    const m = await memberById(gymId, t.customerId), amt = amount(body.amount, 'The amount'), most = t.amount + m.fee - m.paid;
+    if (amt <= 0 || amt > most) fail(400, `Enter an amount from 1 to ${most.toLocaleString('en-IN')}.`);
+    await db.update('transactions', { _id: id, gymId }, { amount: amt, mode: MODES.includes(body.mode) ? body.mode : t.mode, date: body.date ? dateOf(body.date, 'The date') : t.date });
+  }),
   // A payment typed in by mistake. What it paid for is owed again.
   'DELETE /api/payments/:id': write(async ({ gymId, id }) => {
     if (!(await db.find('transactions', { _id: id, gymId })).length) fail(404, 'Payment not found.');
     await db.remove('transactions', { _id: id, gymId });
+  }),
+  // The running period typed in wrongly is corrected: its length, its start, the trainer and diet, its fee. This is for
+  // a mistake; a new purchase is a renewal, which adds a period and leaves this one as it was.
+  'PUT /api/members/:id/period': write(async ({ body, account, gymId, id }) => {
+    const m = await memberById(gymId, id), [old] = await db.find('memberships', { _id: m.membershipId, gymId }), more = extras(body, m);
+    const { paid, ...plan } = period({ ...body, paid: 0, start: body.start || old.start }, account.details, G.todayISO(), more);
+    if (m.fee - m.paid - old.fee + plan.fee < 0) fail(400, 'More has already been paid than this fee. Change or delete a payment first.');
+    await db.update('memberships', { _id: old._id, gymId }, { ...plan, ...more });
+    return memberById(gymId, id);
   }),
   // A renewal made by mistake: the newest period goes and the one before it runs again. The first period of a member
   // cannot go this way, and neither can one that money was taken for.

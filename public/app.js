@@ -49,7 +49,7 @@ const notFound = `<div class="card">${empty('Nothing here', 'This record does no
 // Asks before something is deleted. `action` runs on Yes, with `id` on the button.
 const sure = (title, text, action, id, yes) => openDialog(`<div class="dialog-body"><h2>${esc(title)}</h2><p class="muted">${esc(text)} This cannot be undone.</p></div>
   <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button><button class="btn danger" data-action="${action}" data-id="${esc(id)}">${esc(yes)}</button></footer>`);
-const payDel = (p) => `<button class="btn ghost icon" data-action="payment-delete" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-amount="${money(p.amount)}" aria-label="Delete payment">${icon('trash')}</button>`;
+const payDel = (p) => `<button class="btn ghost icon" data-action="payment-edit" data-id="${esc(p.id)}" aria-label="Change payment">${icon('edit')}</button><button class="btn ghost icon" data-action="payment-delete" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-amount="${money(p.amount)}" aria-label="Delete payment">${icon('trash')}</button>`;
 
 const STATUS = { active: ['paid', 'Active'], expiring: ['partial', 'Ending soon'], expired: ['overdue', 'Ended'] };
 const pill = (m) => { const [cls, label] = STATUS[G.statusOf(m, today())]; return `<span class="pill ${cls}">${label}</span>`; };
@@ -300,6 +300,7 @@ views.members = (id) => {
             <button class="btn secondary" data-action="pay-full" data-id="${esc(m.id)}" data-mode="UPI">Got it by UPI</button>
             <button class="btn secondary" data-action="pay-part" data-id="${esc(m.id)}">Part payment</button>` : ''}
           <button class="btn ${owed ? 'secondary' : 'primary'}" data-action="renew" data-id="${esc(m.id)}">Renew</button>
+          <button class="btn ghost" data-action="period-edit" data-id="${esc(m.id)}">Correct this membership</button>
           ${m.history.length ? `<button class="btn ghost" data-action="period-delete" data-id="${esc(m.id)}" data-name="${esc(m.name)}">Undo this renewal</button>` : ''}</div>
       </div></section>
       <section class="card"><div class="card-head"><h2>WhatsApp</h2></div><div class="card-body">
@@ -332,6 +333,21 @@ Object.assign(actions, {
     await refresh();
     go(`#/members/${m.id}`);
   },
+  'payment-edit'(el) {
+    const p = byId(S.payments, el.dataset.id);
+    openDialog(dialogForm(`Payment from ${p.name}`, 'payment-edit-save', p.id, `<div class="grid">${field('Amount', input('amount', p.amount, `${NUM} required`))}
+      ${field('Paid by', `<select name="mode">${opts(MODES, p.mode)}</select>`)}${field('Date', `<input type="date" name="date" value="${esc(p.date)}" required>`)}</div>`));
+  },
+  async 'payment-edit-save'(form) { await api('PUT', `/api/payments/${form.dataset.id}`, fd(form)); dlg.close(); toast('Payment changed'); await load(); },
+  'period-edit'(el) {
+    const m = byId(S.members, el.dataset.id);
+    openDialog(dialogForm(`${m.name}'s membership`, 'period-edit-save', m.id, `<div class="grid">${monthsField(m.months)}
+      ${field('Starts on', `<input type="date" name="start" value="${esc(m.start)}" required>`)}
+      <div class="row span2">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
+      ${field(`Fee (now ${G.money(m.periodFee)}; leave empty for the gym's price)`, input('fee', '', NUM), 'span2')}</div>
+      <p class="hint">This corrects a mistake in the membership that is running. When a member buys again, use Renew: that keeps this one in the history.</p>`));
+  },
+  async 'period-edit-save'(form) { await api('PUT', `/api/members/${form.dataset.id}/period`, memberBody(form)); dlg.close(); toast('Membership corrected'); await load(); },
   'payment-delete'(el) {
     sure(`Delete this payment of ${el.dataset.amount}?`, `${el.dataset.name} will owe this amount again. Use this for a payment typed in by mistake.`, 'payment-delete-yes', el.dataset.id, 'Delete payment');
   },

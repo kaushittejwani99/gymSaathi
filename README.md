@@ -13,6 +13,7 @@ It costs nothing to run: free hosting, a free database and a free AI key are eno
 - **Welcome message** on joining, with the plan, dates and fee.
 - **Ask anything.** "Kiski fees baaki hai?", "Is mahine kitna paisa aaya?", "Rahul ki membership kab khatam hogi?" The assistant answers from the gym's own members and reads the answer aloud.
 - **Payments.** One tap for "got the full amount in cash" or by UPI, or enter a part payment. Renew a membership in one tap. The Payments page lists every payment the gym received, for one month or for all time, and Members has tabs for fees pending and fees paid.
+- **Mistakes can be corrected.** Change a payment's amount, mode or date, and correct the running membership's months, start date, trainer, diet or fee.
 - **Mistakes can be taken back.** Delete a payment typed in by mistake, undo a renewal made by mistake, delete a member, remove the sample members in one step. The owner of the service can delete a whole gym with everything it holds.
 - **Membership history.** Every period a member buys is saved as its own record and never changed: 1 month now and 3 months later are two records. Every payment is its own record too.
 - **One login per gym.** You (the service owner) add each gym on the Accounts page with its details already filled in: gym name, owner's name and mobile number, address, timings, amenities, UPI ID, prices, and its username and password. A gym sees only its own members.
