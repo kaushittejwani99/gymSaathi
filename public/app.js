@@ -202,7 +202,7 @@ Object.assign(actions, {
     setData(null);
     go('#/login');
   },
-  async 'view-open'(el) { view = el.dataset.id; await refresh(); go('#/dashboard'); },
+  async 'view-open'(el) { view = el.dataset.id; await refresh(); go(el.dataset.to || '#/dashboard'); },
   async 'view-close'() { view = ''; await refresh(); go('#/accounts'); },
 });
 
@@ -612,13 +612,14 @@ views.accounts = () => {
       <td>${planPill(a)}${a.validTill ? `<br><span class="muted">${esc(when(a.validTill))}</span>` : ''}</td>
       <td class="num"><div class="actions">
         <button class="btn primary" data-action="view-open" data-id="${esc(a.id)}">Open</button>
+        <button class="btn secondary" data-action="view-open" data-id="${esc(a.id)}" data-to="#/settings">Edit details</button>
         ${daysLeft(a) <= 5 && G.lastTen(a.phone).length === 10 ? `<a class="btn secondary" target="_blank" rel="noopener" href="${esc(askGym(a))}">Ask on WhatsApp</a>` : ''}
         <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="1">Paid: +1 month</button>
         <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="12">+1 year</button>
         <button class="btn secondary" data-action="account-password" data-id="${esc(a.id)}" data-name="${esc(a.email)}">Reset password</button>
         <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button></div></td></tr>`))}</div>
     <p class="hint">A gym's free month starts at its first sign-in. When its time is over it is signed out and told to pay; press <strong>Paid</strong> when it has, and it can sign in again.
-      <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them.</p>`);
+      <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them. <strong>Edit details</strong> opens its name, owner, address, amenities and prices.</p>`);
 };
 Object.assign(actions, {
   'account-new'() {
