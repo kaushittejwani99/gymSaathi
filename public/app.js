@@ -46,6 +46,11 @@ const dialogForm = (title, action, id, body, submit = 'Save') => `
 const fd = (form) => Object.fromEntries(new FormData(form));
 const notFound = `<div class="card">${empty('Nothing here', 'This record does not exist any more.', '<a class="btn primary" href="#/dashboard">Go to dashboard</a>')}</div>`;
 
+// Asks before something is deleted. `action` runs on Yes, with `id` on the button.
+const sure = (title, text, action, id, yes) => openDialog(`<div class="dialog-body"><h2>${esc(title)}</h2><p class="muted">${esc(text)} This cannot be undone.</p></div>
+  <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button><button class="btn danger" data-action="${action}" data-id="${esc(id)}">${esc(yes)}</button></footer>`);
+const payDel = (p) => `<button class="btn ghost icon" data-action="payment-delete" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-amount="${money(p.amount)}" aria-label="Delete payment">${icon('trash')}</button>`;
+
 const STATUS = { active: ['paid', 'Active'], expiring: ['partial', 'Ending soon'], expired: ['overdue', 'Ended'] };
 const pill = (m) => { const [cls, label] = STATUS[G.statusOf(m, today())]; return `<span class="pill ${cls}">${label}</span>`; };
 const planName = (months) => (months === 12 ? '1 year' : `${months} month${months > 1 ? 's' : ''}`);
@@ -219,7 +224,8 @@ views.dashboard = () => {
   const owed = ms.reduce((s, m) => s + G.due(m), 0), month = S.payments.filter((p) => p.date.startsWith(t.slice(0, 7))).reduce((s, p) => s + p.amount, 0);
   const todo = G.reminders({ gym: S.gym, members: ms, sent: { [t]: S.sent } }, t);
   const kpi = (label, value, hint, bad) => `<div class="card kpi"><div class="muted">${label}</div><div class="kpi-value ${bad ? 'bad' : ''}">${value}</div><div class="hint">${hint}</div></div>`;
-  return page('Dashboard', newBtn, `
+  const sample = ms.some((m) => m.sample) ? '<button class="btn secondary" data-action="sample-clear">Remove sample members</button>' : '';
+  return page('Dashboard', sample + newBtn, `
     <div class="kpis">${kpi('Active members', count('active') + count('expiring'), `${count('expiring')} ending within 7 days`)}
       ${kpi('Membership ended', count('expired'), 'not renewed yet', count('expired') > 0)}
       ${kpi('Fees pending', money(owed), `${ms.filter((m) => G.due(m) > 0).length} members`, owed > 0)}
@@ -293,7 +299,8 @@ views.members = (id) => {
           ${owed ? `<button class="btn primary" data-action="pay-full" data-id="${esc(m.id)}" data-mode="Cash">Got ${money(owed)} in cash</button>
             <button class="btn secondary" data-action="pay-full" data-id="${esc(m.id)}" data-mode="UPI">Got it by UPI</button>
             <button class="btn secondary" data-action="pay-part" data-id="${esc(m.id)}">Part payment</button>` : ''}
-          <button class="btn ${owed ? 'secondary' : 'primary'}" data-action="renew" data-id="${esc(m.id)}">Renew</button></div>
+          <button class="btn ${owed ? 'secondary' : 'primary'}" data-action="renew" data-id="${esc(m.id)}">Renew</button>
+          ${m.history.length ? `<button class="btn ghost" data-action="period-delete" data-id="${esc(m.id)}" data-name="${esc(m.name)}">Undo this renewal</button>` : ''}</div>
       </div></section>
       <section class="card"><div class="card-head"><h2>WhatsApp</h2></div><div class="card-body">
         <p class="muted">Opens WhatsApp on ${esc(m.phone)} with the message typed in.</p>
@@ -305,7 +312,7 @@ views.members = (id) => {
         ${row('Mobile', m.phone)}${row('Gender', m.gender)}${row('Age', m.age)}${row('Weight', m.weight && `${m.weight} kg`)}${row('Height', m.height)}${row('Goal', m.goal)}
         ${row('Health', m.health)}${row('Batch', m.batch)}${row('Joined', G.fmtDate(m.joinedAt))}${row('Notes', m.notes)}</tbody></table></div></section>
       <section class="card"><div class="card-head"><h2>Payments</h2></div>
-        ${pays.length ? table(['Date', 'Paid by', '#Amount'], pays.map((p) => `<tr><td>${esc(G.fmtDate(p.date))}</td><td>${esc(p.mode)}</td><td class="num">${money(p.amount)}</td></tr>`)) : empty('No payment yet', '')}
+        ${pays.length ? table(['Date', 'Paid by', '#Amount', ''], pays.map((p) => `<tr><td>${esc(G.fmtDate(p.date))}</td><td>${esc(p.mode)}</td><td class="num">${money(p.amount)}</td><td class="num">${payDel(p)}</td></tr>`)) : empty('No payment yet', '')}
         ${m.history.length ? `<div class="card-body"><p class="hint">Earlier memberships: ${m.history.map((h) => `${planName(h.months)}, ${esc(G.fmtDate(h.start))} to ${esc(G.fmtDate(h.end))}, ${money(h.fee)}`).join('; ')}</p></div>` : ''}
       </section>
     </div>`);
@@ -325,6 +332,18 @@ Object.assign(actions, {
     await refresh();
     go(`#/members/${m.id}`);
   },
+  'payment-delete'(el) {
+    sure(`Delete this payment of ${el.dataset.amount}?`, `${el.dataset.name} will owe this amount again. Use this for a payment typed in by mistake.`, 'payment-delete-yes', el.dataset.id, 'Delete payment');
+  },
+  async 'payment-delete-yes'(el) { await api('DELETE', `/api/payments/${el.dataset.id}`); dlg.close(); toast('Payment deleted'); await load(); },
+  'period-delete'(el) {
+    sure(`Undo ${el.dataset.name}'s last renewal?`, 'The newest membership is removed and the one before it runs again. Use this for a renewal made by mistake.', 'period-delete-yes', el.dataset.id, 'Undo renewal');
+  },
+  async 'period-delete-yes'(el) { await api('DELETE', `/api/members/${el.dataset.id}/period`); dlg.close(); toast('Renewal undone'); await load(); },
+  'sample-clear'() {
+    sure('Remove the sample members?', 'Every sample member goes, with their memberships and payments. Members you added yourself stay.', 'sample-clear-yes', '', 'Remove sample members');
+  },
+  async 'sample-clear-yes'() { const r = await api('DELETE', '/api/sample'); dlg.close(); toast(`${r.removed} sample members removed`); await load(); },
   'member-delete'(el) {
     openDialog(`<div class="dialog-body"><h2>Delete ${esc(el.dataset.name)}?</h2><p class="muted">The member and their payments are removed. This cannot be undone.</p></div>
       <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button>
@@ -377,8 +396,8 @@ function paymentRows() {
   const rows = S.payments.filter((p) => !F.month || p.date.startsWith(F.month)).sort((a, b) => (a.date < b.date) - (a.date > b.date));
   const total = rows.reduce((s, p) => s + p.amount, 0);
   if (!rows.length) return empty('No payment here', F.month ? 'Nothing was received in this month. Clear the month to see all.' : 'Payments show up here as members pay.');
-  return `<div class="card-body"><strong>${money(total)}</strong> received in ${rows.length} payment${rows.length > 1 ? 's' : ''}</div>` + table(['Date', 'Member', 'Paid by', '#Amount'], rows.map((p) => `<tr>
-    <td>${esc(G.fmtDate(p.date))}</td><td>${byId(S.members, p.memberId) ? `<a href="#/members/${esc(p.memberId)}">${esc(p.name)}</a>` : esc(p.name)}</td><td>${esc(p.mode)}</td><td class="num">${money(p.amount)}</td></tr>`));
+  return `<div class="card-body"><strong>${money(total)}</strong> received in ${rows.length} payment${rows.length > 1 ? 's' : ''}</div>` + table(['Date', 'Member', 'Paid by', '#Amount', ''], rows.map((p) => `<tr>
+    <td>${esc(G.fmtDate(p.date))}</td><td>${byId(S.members, p.memberId) ? `<a href="#/members/${esc(p.memberId)}">${esc(p.name)}</a>` : esc(p.name)}</td><td>${esc(p.mode)}</td><td class="num">${money(p.amount)}</td><td class="num">${payDel(p)}</td></tr>`));
 }
 views.payments = () => {
   const owe = S.members.filter((m) => G.due(m) > 0), owed = owe.reduce((s, m) => s + G.due(m), 0);
@@ -618,7 +637,8 @@ views.accounts = () => {
         <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="1">Paid: +1 month</button>
         <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="12">+1 year</button>
         <button class="btn secondary" data-action="account-password" data-id="${esc(a.id)}" data-name="${esc(a.email)}" data-gym="${esc(a.gym)}">Username, password</button>
-        <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button></div></td></tr>`))}</div>
+        <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button>
+        <button class="btn danger" data-action="account-delete" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-members="${a.members}">Delete</button></div></td></tr>`))}</div>
     <p class="hint">A gym's free month starts at its first sign-in. When its time is over it is signed out and told to pay; press <strong>Paid</strong> when it has, and it can sign in again.
       <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them. <strong>Edit details</strong> opens its name, owner, address, amenities and prices.</p>`);
 };
@@ -648,6 +668,10 @@ Object.assign(actions, {
       ${field('New password (leave empty to keep the old one)', '<input name="password" type="password" minlength="8" maxlength="200" autocomplete="new-password">', 'span2')}</div>`, 'Save login'));
   },
   async 'account-password-save'(form) { await api('PUT', `/api/admin/gyms/${form.dataset.id}`, fd(form)); dlg.close(); toast('Login saved. That gym is signed out everywhere.'); await loadAccounts(); },
+  'account-delete'(el) {
+    sure(`Delete ${el.dataset.name}?`, `The gym, its login, its ${el.dataset.members} members and all their memberships and payments are removed for good. To only stop it signing in, use Switch off.`, 'account-delete-yes', el.dataset.id, 'Delete gym');
+  },
+  async 'account-delete-yes'(el) { await api('DELETE', `/api/admin/gyms/${el.dataset.id}`); dlg.close(); toast('Gym deleted'); await loadAccounts(); },
   async 'account-toggle'(el) { await api('PUT', `/api/admin/gyms/${el.dataset.id}`, { disabled: !!el.dataset.off }); toast(el.dataset.off ? 'Gym switched off' : 'Gym switched on'); await loadAccounts(); },
 });
 

@@ -147,6 +147,12 @@ async function loadGym(account) {
     members: customers.map((c) => memberOf(c, periods.filter((p) => p.customerId === c._id), paid.filter((t) => t.customerId === c._id))),
     payments: paid.map((t) => ({ id: t._id, memberId: t.customerId, name: t.name, amount: t.amount, date: t.date, mode: t.mode })) };
 }
+// A member goes with every period they bought and every payment they made.
+async function dropMember(gymId, id) {
+  await db.remove('customers', { _id: id, gymId });
+  await db.remove('memberships', { gymId, customerId: id });
+  await db.remove('transactions', { gymId, customerId: id });
+}
 const pay = (gymId, customerId, name, membershipId, amt, mode, date) => amt > 0 && db.insert('transactions',
   { _id: newId(), gymId, customerId, membershipId, name, amount: amt, mode: MODES.includes(mode) ? mode : 'Cash', date, createdAt: stamp() });
 
@@ -295,9 +301,27 @@ const gymRoutes = {
   }),
   'DELETE /api/members/:id': write(async ({ gymId, id }) => {
     await memberById(gymId, id);
-    await db.remove('customers', { _id: id, gymId });
-    await db.remove('memberships', { gymId, customerId: id });
-    await db.remove('transactions', { gymId, customerId: id });
+    await dropMember(gymId, id);
+  }),
+  // The sample members that 'Load sample members' made, all at once.
+  'DELETE /api/sample': write(async ({ gymId }) => {
+    const sample = await db.find('customers', { gymId, sample: true });
+    for (const c of sample) await dropMember(gymId, c._id);
+    return { removed: sample.length };
+  }),
+  // A payment typed in by mistake. What it paid for is owed again.
+  'DELETE /api/payments/:id': write(async ({ gymId, id }) => {
+    if (!(await db.find('transactions', { _id: id, gymId })).length) fail(404, 'Payment not found.');
+    await db.remove('transactions', { _id: id, gymId });
+  }),
+  // A renewal made by mistake: the newest period goes and the one before it runs again. The first period of a member
+  // cannot go this way, and neither can one that money was taken for.
+  'DELETE /api/members/:id/period': write(async ({ gymId, id }) => {
+    const m = await memberById(gymId, id);
+    if (!m.history.length) fail(400, `This is the only membership ${m.name} has. Delete the member instead.`);
+    if ((await db.find('transactions', { gymId, membershipId: m.membershipId })).length) fail(400, 'Money was taken with this renewal. Delete those payments first.');
+    await db.remove('memberships', { _id: m.membershipId, gymId });
+    return memberById(gymId, id);
   }),
   // A new period, added beside the earlier ones. Anything still owed on those stays owed.
   'POST /api/members/:id/renew': write(async ({ body, account, gymId, id }) => {
@@ -343,7 +367,7 @@ const gymRoutes = {
     for (const [name, phone, months, ago, fee, paid] of rows) {
       const start = G.addDays(today, ago), id = newId(), membershipId = newId();
       await db.insert('memberships', { _id: membershipId, gymId, customerId: id, months, start, end: G.endOf(start, months), fee, pt: fee === 3000, diet: false, createdAt: stamp() });
-      await db.insert('customers', { _id: id, gymId, name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', notes: '', joinedAt: start });
+      await db.insert('customers', { _id: id, gymId, name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', notes: '', joinedAt: start, sample: true });
       await pay(gymId, id, name, membershipId, paid, 'Cash', start);
     }
   }),
@@ -366,6 +390,12 @@ const adminRoutes = {
     const details = { ...gymFields(body), owner: required(body.owner, "The owner's name", 80), phone: phoneOf(body.phone) };
     const made = await createGym(loginName(body.email), newPassword(body.password), details);
     return made ? { id: made._id } : fail(409, 'That username is already taken.');
+  },
+  // A gym goes with everything it holds: its members, their periods and payments, and its login.
+  'DELETE /api/admin/gyms/:id': async ({ id }) => {
+    if (!(await gymById(id))) fail(404, 'Gym not found.');
+    for (const name of ['sessions', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
+    await db.remove('gyms', { _id: id });
   },
   'PUT /api/admin/gyms/:id': async ({ body, id }) => {
     const g = (await gymById(id)) || fail(404, 'Gym not found.');

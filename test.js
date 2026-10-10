@@ -227,6 +227,24 @@ async function apiChecks() {
     assert.deepEqual([await status(browser()('POST', '/api/auth/login', { email: ' ox  FIT ', password: 'first-password' })), await status(browser()('POST', '/api/auth/login', { email: 'Ox Fit', password: 'wrong-password' })),
       await status(browser()('POST', '/api/auth/login', { email: 'Fit Zone', password: 'first-password' }))], [200, 401, 401]);
 
+    // Mistakes can be taken back. A renewal that money was taken for stays until that payment is deleted; then the
+    // period before it runs again. A member's only period cannot go this way
+    const wrong = (await ok(gym('GET', '/api/data'))).payments.find((p) => p.memberId === rahul.id && p.amount === 1000);
+    assert.deepEqual([await status(gym('DELETE', `/api/members/${rahul.id}/period`)), await status(gym('DELETE', '/api/payments/0123456789abcdef'))], [400, 404]);
+    await ok(gym('DELETE', `/api/payments/${wrong.id}`));
+    const back = await ok(gym('DELETE', `/api/members/${rahul.id}/period`));
+    assert.deepEqual([back.months, back.end, back.fee, back.paid, back.history.length, await status(gym('DELETE', `/api/members/${rahul.id}/period`))], [3, rahul.end, 8700, 5000, 0, 400]);
+    // Sample members go in one step and leave the gym's own members alone
+    const ox = browser();
+    await ok(ox('POST', '/api/auth/login', { email: 'oxfit', password: 'first-password' }));
+    await ok(ox('POST', '/api/seed'));
+    await ok(ox('POST', '/api/members', { name: 'Own Member', phone: '9829011199', months: 1 }));
+    assert.deepEqual([(await ok(ox('GET', '/api/data'))).members.length, (await ok(ox('DELETE', '/api/sample'))).removed, (await ok(ox('GET', '/api/data'))).members.map((m) => m.name),
+      (await db.find('memberships', { gymId: third })).length, (await db.find('transactions', { gymId: third })).length], [9, 8, ['Own Member'], 1, 0]);
+    // The owner of the service deletes a gym with everything it holds
+    assert.deepEqual([await status(ox('DELETE', `/api/admin/gyms/${third}`)), (await ok(owner('DELETE', `/api/admin/gyms/${third}`))).ok, await status(ox('GET', '/api/data')), await listed('oxfit'),
+      (await db.find('customers', { gymId: third })).length, (await db.find('memberships', { gymId: third })).length, (await db.find('sessions', { gymId: third })).length], [403, true, 401, undefined, 0, 0, 0]);
+
     // Passwords: the gym changes its own; the owner resets one and switches a gym off
     assert.equal(await status(gym('POST', '/api/auth/password', { current: 'wrong-one', password: 'second-password' })), 400);
     await ok(gym('POST', '/api/auth/password', { current: 'first-password', password: 'second-password' }));
