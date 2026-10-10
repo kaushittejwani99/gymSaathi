@@ -1,5 +1,7 @@
 // Checks the date and fee rules, then drives the whole API on a temporary folder: node test.js
 // Nothing here reaches Google or WhatsApp, and your real data is never touched.
+// `node test.js mongo` runs the same checks on the MongoDB that .env names, in a database of their own
+// (gymsaathi_test) that is dropped at the end.
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,12 +26,16 @@ function coreChecks() {
   assert.ok(G.waLink('+91 98290-11111', 'नमस्ते').startsWith('https://wa.me/919829011111?text=%E0%A4'));
 }
 
+const MONGO = process.argv[2] === 'mongo';
+
 async function apiChecks() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gymsaathi-test-'));
-  Object.assign(process.env, { DATA_DIR: dir, ADMIN_EMAIL: 'owner', ADMIN_PASSWORD: 'owner-password' });
-  for (const name of ['MONGODB_URI', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'TRUST_PROXY']) delete process.env[name];
-  const srv = await require('./server').start(0);
-  for (const name of ['MONGODB_URI', 'GEMINI_API_KEY']) delete process.env[name]; // whatever .env holds must not steer the test
+  // Set before the server loads .env: what is already set wins, so nothing in .env can steer the test
+  Object.assign(process.env, { DATA_DIR: dir, ADMIN_EMAIL: 'owner', ADMIN_PASSWORD: 'owner-password', GEMINI_API_KEY: '', GEMINI_MODEL: '', PAY_NOTE: '', TRUST_PROXY: '', MONGODB_DB: 'gymsaathi_test' });
+  if (!MONGO) process.env.MONGODB_URI = '';
+  const srv = await require('./server').start(0), db = require('./lib/db');
+  assert.equal(db.usingMongo, MONGO, MONGO ? 'Put MONGODB_URI in .env first.' : '');
+  if (MONGO) await (await db.ready).dropDatabase(); // what an earlier run that broke off left behind
   const today = G.todayISO();
   const browser = () => {
     let cookie = '';
@@ -42,18 +48,28 @@ async function apiChecks() {
   const ok = async (call) => { const [status, body] = await call; assert.equal(status, 200, JSON.stringify(body)); return body; };
   const status = async (call) => (await call)[0];
   const owner = browser(), gym = browser(), other = browser(), nobody = browser();
+  const listed = async (email) => (await ok(owner('GET', '/api/admin/gyms'))).find((g) => g.email === email);
 
   try {
-    // Only the owner of the service makes gym logins; a gym sees its own data only
+    // Only the owner of the service makes gym logins. The owner has no gym of their own
     assert.equal(await status(nobody('GET', '/api/data')), 401);
     await ok(owner('POST', '/api/auth/login', { email: 'owner', password: 'owner-password' }));
-    await ok(owner('POST', '/api/admin/users', { gymName: 'Fit Zone', email: 'fit.zone', password: 'first-password' }));
-    await ok(owner('POST', '/api/admin/users', { gymName: 'Fit Zone', email: 'second.gym', password: 'first-password' }));
-    assert.equal(await status(owner('POST', '/api/admin/users', { gymName: 'Copy', email: 'fit.zone', password: 'first-password' })), 409);
+    assert.deepEqual([(await ok(owner('GET', '/api/data'))).gym, await status(owner('POST', '/api/members', { name: 'A', phone: '9829011111', months: 1 }))], [null, 400]);
+    await ok(owner('POST', '/api/admin/gyms', { gymName: 'Fit Zone', email: 'fit.zone', password: 'first-password' }));
+    await ok(owner('POST', '/api/admin/gyms', { gymName: 'Fit Zone', email: 'second.gym', password: 'first-password' }));
+    assert.deepEqual([await status(owner('POST', '/api/admin/gyms', { gymName: 'Copy', email: 'fit.zone', password: 'first-password' })),
+      await status(owner('POST', '/api/admin/gyms', { gymName: 'Copy', email: 'owner', password: 'first-password' }))], [409, 409]);
+
+    // A gym's free month starts at its first sign-in, to the minute; signing in again does not move it
+    assert.deepEqual([(await listed('fit.zone')).firstLoginAt, (await listed('fit.zone')).validTill], [null, null]);
     await ok(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'first-password' }));
     await ok(other('POST', '/api/auth/login', { email: 'second.gym', password: 'first-password' }));
-    assert.deepEqual([await status(gym('GET', '/api/admin/users')), await status(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'wrong' }))], [403, 401]);
+    const fit = await listed('fit.zone');
+    assert.ok(Math.abs(Date.parse(fit.firstLoginAt) - Date.now()) < 60e3, fit.firstLoginAt);
+    assert.equal(fit.validTill, G.addMonths(fit.firstLoginAt.slice(0, 10), 1) + fit.firstLoginAt.slice(10));
+    assert.deepEqual([await status(gym('GET', '/api/admin/gyms')), await status(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'wrong' }))], [403, 401]);
     await ok(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'first-password' }));
+    assert.deepEqual([(await listed('fit.zone')).firstLoginAt, (await listed('fit.zone')).validTill, (await ok(gym('GET', '/api/data'))).validTill], [fit.firstLoginAt, fit.validTill, fit.validTill]);
 
     const prices = { name: 'Fit Zone', owner: 'Vikram', price1: 1000, price3: 2700, price12: 9000, ptPrice: 2000, dietPrice: 500 };
     assert.equal((await ok(gym('PUT', '/api/gym', prices))).price3, 2700);
@@ -76,11 +92,14 @@ async function apiChecks() {
 
     // Saving the form makes the member. Nothing was paid, so the fee is pending and is asked for today
     const rahul = await ok(gym('POST', '/api/members', { ...t.form, fee: t.fee }));
-    assert.deepEqual([rahul.fee, rahul.paid, rahul.start, rahul.end, rahul.joinedAt], [8700, 0, today, G.endOf(today, 3), today]);
+    assert.deepEqual([rahul.fee, rahul.paid, rahul.pt, rahul.start, rahul.end, rahul.joinedAt], [8700, 0, true, today, G.endOf(today, 3), today]);
     let data = await ok(gym('GET', '/api/data'));
     assert.deepEqual(G.reminders({ gym: data.gym, members: data.members, sent: { [today]: data.sent } }, today).map((r) => [r.type, r.name]), [['fees', 'Rahul Sharma']]);
     assert.equal(await status(gym('POST', '/api/members', { name: 'Twin', phone: '+91 98290-11111', months: 1 })), 409); // the same mobile number
     assert.deepEqual([await status(gym('POST', '/api/members', { name: 'No Plan', phone: '9829011113', months: 2 })), await status(gym('POST', '/api/members', { name: 'Bad', phone: '12345', months: 1 }))], [400, 400]);
+    // A correction changes who the member is, never the period they bought
+    const fixed = await ok(gym('PUT', `/api/members/${rahul.id}`, { name: 'Rahul Sharma', phone: '9829011111', age: 26, pt: false, months: 12 }));
+    assert.deepEqual([fixed.age, fixed.pt, fixed.months, fixed.fee], [26, true, 3, 8700]);
 
     // A reminder that went out is not offered again today; a payment brings the dues down, and never below zero
     await ok(gym('POST', '/api/reminders/sent', { memberId: rahul.id, type: 'fees' }));
@@ -88,15 +107,27 @@ async function apiChecks() {
     assert.equal((await ok(gym('POST', `/api/members/${rahul.id}/pay`, { amount: 5000, mode: 'UPI' }))).paid, 5000);
     assert.equal(await status(gym('POST', `/api/members/${rahul.id}/pay`, { amount: 3701 })), 400);
 
-    // Renewing starts the day after the old period ends, keeps the old one in history and carries the dues over
+    // Renewing starts the day after the old period ends and carries the dues over. The old period is not changed:
+    // the new one is a document of its own, and so is each payment
     const renewed = await ok(gym('POST', `/api/members/${rahul.id}/renew`, { months: 1, pt: false, paid: 1000 }));
-    assert.deepEqual([renewed.start, renewed.end, renewed.fee, renewed.paid, renewed.history.length, renewed.pt], [G.addDays(rahul.end, 1), G.endOf(G.addDays(rahul.end, 1), 1), 1000 + 3700, 1000, 1, false]);
+    assert.deepEqual([renewed.start, renewed.end, renewed.fee, renewed.paid, renewed.pt], [G.addDays(rahul.end, 1), G.endOf(G.addDays(rahul.end, 1), 1), 1000 + 3700, 1000, false]);
+    assert.deepEqual(renewed.history, [{ months: 3, start: today, end: rahul.end, fee: 8700 }]);
+    const periods = await db.find('memberships', { customerId: rahul.id }), paid = await db.find('transactions', { customerId: rahul.id });
+    assert.deepEqual(periods.map((p) => [p.months, p.fee, p.pt]).sort(), [[1, 1000, false], [3, 8700, true]]);
+    assert.deepEqual(paid.map((p) => periods.find((x) => x._id === p.membershipId).months).sort(), [1, 3]); // each payment names the period it was taken in
     data = await ok(gym('GET', '/api/data'));
     assert.deepEqual(data.payments.map((p) => [p.amount, p.mode]), [[5000, 'UPI'], [1000, 'Cash']]);
 
     // The other gym sees none of it
     assert.deepEqual([(await ok(other('GET', '/api/data'))).members.length, await status(other('PUT', `/api/members/${rahul.id}`, { name: 'X', phone: '9829011111' })),
       await status(other('POST', `/api/members/${rahul.id}/pay`, { amount: 1 })), await status(other('DELETE', `/api/members/${rahul.id}`))], [0, 404, 404, 404]);
+    // The owner of the service sees every gym's numbers, and opens any gym to see what it sees
+    const seen = await listed('fit.zone');
+    assert.deepEqual([seen.gym, seen.owner, seen.members, seen.collected, seen.due, 'hash' in seen || 'salt' in seen], ['Fit Zone', 'Vikram', 1, 6000, 3700, false]);
+    const opened = await ok(owner('GET', `/api/data?gym=${seen.id}`));
+    assert.deepEqual([opened.gym.name, opened.members.map((m) => m.name), opened.payments.length, opened.user.admin], ['Fit Zone', ['Rahul Sharma'], 2, true]);
+    const sly = await ok(gym('GET', `/api/data?gym=${(await listed('second.gym')).id}`)); // a gym naming another still gets its own
+    assert.deepEqual([sly.members.length, sly.user.admin], [1, false]);
 
     // Questions are answered from the gym's own members; 'naya member jodo' starts the registration talk
     const owes = await ok(gym('POST', '/api/chat', { question: 'किसकी फीस बाकी है?', quick: true }));
@@ -120,25 +151,48 @@ async function apiChecks() {
       const plainly = await ok(gym('POST', '/api/register/turn', { form: { name: 'Priya Jain' }, asked: 'phone', said: 'मेरा नंबर है 98290 22222 लिख लीजिए' }));
       assert.deepEqual([plainly.form.phone, plainly.next], ['9829022222', 'gender']);
     } finally {
-      delete process.env.GEMINI_API_KEY;
+      process.env.GEMINI_API_KEY = '';
       global.fetch = realFetch;
     }
+
+    // When the free month is over the gym is signed out everywhere and told to pay; signing in says the same
+    const second = await listed('second.gym'), past = '2020-01-01T00:00:00.000Z';
+    await db.update('gyms', { _id: second.id }, { validTill: past });
+    let [code, body] = await other('GET', '/api/data');
+    assert.deepEqual([code, body.error], [402, 'Your free trial is over. Pay ₹500 to start the service again.']);
+    assert.equal(await status(other('GET', '/api/data')), 401);
+    [code, body] = await other('POST', '/api/auth/login', { email: 'second.gym', password: 'first-password' });
+    assert.deepEqual([code, body.error], [402, 'Your free trial is over. Pay ₹500 to start the service again.']);
+    // The owner marks it paid: one month from now, and the gym signs in again. The first sign-in stays as it was
+    const till = (await ok(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 1 }))).validTill;
+    assert.equal(till.slice(0, 10), G.addMonths(new Date().toISOString().slice(0, 10), 1));
+    await ok(other('POST', '/api/auth/login', { email: 'second.gym', password: 'first-password' }));
+    assert.deepEqual([(await listed('second.gym')).firstLoginAt, (await listed('second.gym')).paidMonths, (await ok(other('GET', '/api/data'))).paying], [second.firstLoginAt, 1, true]);
+    // Paying early adds to the time left; and once a paid month is over the message says plan, not trial
+    assert.equal((await ok(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 12 }))).validTill, G.addMonths(till.slice(0, 10), 12) + till.slice(10));
+    await db.update('gyms', { _id: second.id }, { validTill: past });
+    assert.equal((await other('GET', '/api/data'))[1].error, 'Your plan is over. Pay ₹500 to start the service again.');
+    assert.equal(await status(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 5 })), 400);
 
     // Passwords: the gym changes its own; the owner resets one and switches a gym off
     assert.equal(await status(gym('POST', '/api/auth/password', { current: 'wrong-one', password: 'second-password' })), 400);
     await ok(gym('POST', '/api/auth/password', { current: 'first-password', password: 'second-password' }));
     assert.deepEqual([await status(gym('GET', '/api/data')), await status(browser()('POST', '/api/auth/login', { email: 'fit.zone', password: 'first-password' }))], [200, 401]);
-    const users = await ok(owner('GET', '/api/admin/users')), fit = users.find((u) => u.email === 'fit.zone');
-    assert.deepEqual([users.length, users.some((u) => 'hash' in u || 'salt' in u), users.map((u) => u.gym).sort()], [3, false, ['Fit Zone', 'Fit Zone', 'GymSaathi Admin']]);
-    await ok(owner('PUT', `/api/admin/users/${fit.id}`, { disabled: true }));
+    await ok(owner('PUT', `/api/admin/gyms/${seen.id}`, { disabled: true }));
     assert.deepEqual([await status(gym('GET', '/api/data')), await status(gym('POST', '/api/auth/login', { email: 'fit.zone', password: 'second-password' }))], [401, 403]);
-    // Each gym has its own document, and a write without the JSON content type is refused
-    assert.deepEqual(fs.readdirSync(dir).sort(), ['gym_fit-zone-2.json', 'gym_fit-zone.json', 'gym_gymsaathi-admin.json', 'sessions.json', 'users.json']);
+    // Deleting a member takes their periods and payments along; the owner signs out
+    await ok(owner('DELETE', `/api/members/${rahul.id}?gym=${seen.id}`));
+    assert.deepEqual([(await db.find('memberships', { gymId: seen.id })).length, (await db.find('transactions', { gymId: seen.id })).length], [0, 0]);
+    await ok(owner('POST', '/api/auth/logout'));
+    assert.equal(await status(owner('GET', '/api/admin/gyms')), 401);
+    // One file per collection, and a write without the JSON content type is refused
+    if (!MONGO) assert.deepEqual(fs.readdirSync(dir).sort(), ['customers.json', 'gyms.json', 'memberships.json', 'sessions.json', 'transactions.json']);
     const plain = await fetch(`http://127.0.0.1:${srv.address().port}/api/auth/login`, { method: 'POST', body: '{}' });
     assert.equal(plain.status, 415);
   } finally {
     srv.close();
     fs.rmSync(dir, { recursive: true, force: true });
+    if (MONGO) await (await db.ready).dropDatabase();
   }
 }
 
@@ -146,5 +200,6 @@ async function apiChecks() {
   coreChecks();
   console.log('ok  dates, fees and reminders');
   await apiChecks();
-  console.log('ok  api');
+  console.log(`ok  api (${MONGO ? 'MongoDB' : 'files'})`);
+  if (MONGO) process.exit(0); // the database connection would keep the process open
 })().catch((e) => { console.error(e); process.exit(1); });

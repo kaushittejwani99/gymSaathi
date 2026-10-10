@@ -47,6 +47,8 @@ a:hover { text-decoration: underline; }
 .side-foot { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; }
 .side-foot .btn { justify-content: flex-start; padding: 0 10px; }
 .biz-name { padding: 0 10px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-note { padding: 0 10px; }
+.pay-note { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 10px 12px; color: #78350f; font-weight: 600; }
 .topbar, .scrim { display: none; }
 #main { margin-left: 232px; padding: 24px 28px 96px; }
 /* kept at element specificity so a page can narrow itself (the sign-in card) */

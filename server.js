@@ -14,7 +14,8 @@ const db = require('./lib/db');
 const ai = require('./lib/ai');
 
 const MAX_BODY = 256 * 1024;
-const SESSION_DAYS = 30;
+const TRIAL_MONTHS = 1, PRICE = 500; // a gym's first month from its first sign-in is free; after that it pays PRICE a month
+const OWNER_DAYS = 30;               // how long the owner of the service stays signed in
 const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'";
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Other'];
@@ -22,7 +23,10 @@ const MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Other'];
 // Errors a gym owner may read. Anything thrown without httpStatus is a bug and is answered with a plain 500.
 const fail = (status, message) => { throw Object.assign(new Error(message), { httpStatus: status }); };
 const newId = () => crypto.randomBytes(8).toString('hex');
+const stamp = () => new Date().toISOString();
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+const same = (a, b) => crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const sum = (list, key) => list.reduce((s, x) => s + x[key], 0);
 const required = (v, label, max) => G.str(v, max) || fail(400, `${label} is required.`);
 const amount = (v, label, max = 1e7) => { const n = Number(v); return n >= 0 && n <= max ? Math.round(n) : fail(400, `${label} must be a number from 0 to ${max.toLocaleString('en-IN')}.`); };
 const phoneOf = (v) => { const d = G.lastTen(v); return /^[6-9]\d{9}$/.test(d) ? d : fail(400, 'The mobile number must have 10 digits.'); };
@@ -31,59 +35,40 @@ const dateOf = (v, label) => (G.isDate(v) && v >= '2000-01-01' && v <= '2099-12-
 // ---- accounts (one login per gym, made by the owner of this service)
 
 const hashed = (password, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, hash: crypto.scryptSync(password, salt, 64).toString('hex') });
+// The owner of the service is not kept in the database: the login is ADMIN_EMAIL and ADMIN_PASSWORD from the environment.
 const adminEmail = () => G.str(process.env.ADMIN_EMAIL).toLowerCase();
-const isAdmin = (user) => !!adminEmail() && user.email === adminEmail();
+const adminOk = (password) => { const real = process.env.ADMIN_PASSWORD || ''; return real.length >= 8 && same(sha256(password), sha256(real)); };
 const loginName = (v) => { const s = G.str(v, 100).toLowerCase(); return /^[a-z0-9._@+-]{3,100}$/.test(s) ? s : fail(400, 'A username has 3 to 100 letters, digits, dots or dashes, with no spaces.'); };
 const newPassword = (v) => (typeof v === 'string' && v.length >= 8 && v.length <= 200 ? v : fail(400, 'A password needs at least 8 characters.'));
-const newGym = (name) => ({ gym: { name, owner: '', phone: '', address: '', timings: '', amenities: '', upi: '', price1: 0, price3: 0, price6: 0, price12: 0, ptPrice: 0, dietPrice: 0 },
-  members: [], payments: [], sent: {} });
+// The same day and time `n` months on (31 Jan -> 28 Feb).
+const monthsAfter = (iso, n) => G.addMonths(iso.slice(0, 10), n) + iso.slice(10);
+// PAY_NOTE says where the money goes ('UPI name@bank, or call 98290 00000'). It is shown wherever a gym is asked to pay.
+const payNote = () => G.str(process.env.PAY_NOTE, 200);
+const over = (g) => `Your ${g.renewals.length ? 'plan' : 'free trial'} is over. Pay ₹${PRICE} to start the service again.${payNote() && ` ${payNote()}`}`;
+const gymById = async (id) => (await db.find('gyms', { _id: id }))[0];
 
-// Makes the login and the gym's own document. The gym's id comes from its name; a taken one gets -2, -3 and so on.
-async function createUser(email, password, gymName) {
-  return db.change('users', async (users) => {
-    if (users.some((u) => u.email === email)) return null;
-    const slug = gymName.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-+|-+$/g, '') || 'gym';
-    let gymId = slug;
-    for (let n = 2; users.some((u) => u.gymId === gymId); n++) gymId = `${slug}-${n}`;
-    await db.set(`gym:${gymId}`, newGym(gymName));
-    const user = { id: newId(), email, ...hashed(password), gymId, gymName, createdAt: new Date().toISOString() };
-    users.push(user);
-    return user;
-  }, []);
+async function createGym(email, password, name) {
+  if (email === adminEmail() || (await db.find('gyms', { email })).length) return null;
+  const g = { _id: newId(), email, ...hashed(password), createdAt: stamp(), disabled: false, firstLoginAt: null, lastLoginAt: null, validTill: null, renewals: [], sent: {},
+    details: { name, owner: '', phone: '', address: '', timings: '', amenities: '', upi: '', price1: 0, price3: 0, price6: 0, price12: 0, ptPrice: 0, dietPrice: 0 } };
+  await db.insert('gyms', g);
+  return g;
 }
 
-async function ensureAdmin() {
-  const email = adminEmail(), password = process.env.ADMIN_PASSWORD;
-  if (!email) return console.log('No ADMIN_EMAIL is set, so nobody can create gym logins. Set ADMIN_EMAIL and ADMIN_PASSWORD.');
-  if (((await db.get('users')) || []).some((u) => u.email === email)) return undefined;
-  if (!password || password.length < 8) return console.log('Set ADMIN_PASSWORD (8 characters or more) to create the owner account.');
-  await createUser(email, password, 'GymSaathi Admin');
-  return console.log(`Owner account created: ${email}`);
+// Who a session cookie belongs to. Only the hash of the token is kept, so a leaked copy of the sessions cannot be
+// replayed. A gym stays signed in until its time runs out: then every device of it is signed out and told to pay.
+async function sessionOf(token) {
+  const s = token && (await db.find('sessions', { _id: sha256(token) }))[0];
+  if (!s) return null;
+  if (s.admin) return s.until > Date.now() ? { admin: true } : null;
+  const account = await gymById(s.gymId);
+  if (!account || account.disabled) return null;
+  if (stamp() >= account.validTill) {
+    await db.remove('sessions', { gymId: account._id });
+    fail(402, over(account));
+  }
+  return { account };
 }
-
-async function verifyUser(email, password) {
-  const user = ((await db.get('users')) || []).find((u) => u.email === email);
-  // The same work is done for an unknown name, so the time taken does not say which names exist.
-  const { hash } = hashed(password, user ? user.salt : '00');
-  return user && crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(user.hash)) ? user : null;
-}
-
-// Only the hash of a session token is kept, so a leaked copy of the sessions cannot be replayed.
-async function createSession(userId) {
-  const token = crypto.randomBytes(32).toString('hex'), now = Date.now();
-  await db.change('sessions', (all) => {
-    for (const k of Object.keys(all)) if (all[k].until < now) delete all[k];
-    all[sha256(token)] = { userId, until: now + SESSION_DAYS * 864e5 };
-  }, {});
-  return token;
-}
-async function sessionUser(token) {
-  const s = token && ((await db.get('sessions')) || {})[sha256(token)];
-  if (!s || s.until < Date.now()) return null;
-  const user = ((await db.get('users')) || []).find((u) => u.id === s.userId);
-  return user && !user.disabled ? user : null;
-}
-const endSessions = (keep) => db.change('sessions', (all) => { for (const k of Object.keys(all)) if (keep(all[k], k)) delete all[k]; }, {});
 
 // ---- plumbing
 
@@ -93,8 +78,9 @@ function send(res, status, type, body, headers) {
 }
 const json = (res, status, data) => send(res, status, 'application/json; charset=utf-8', JSON.stringify(data));
 const cookieOf = (req) => (/(?:^|;\s*)sid=([a-f0-9]{64})/.exec(req.headers.cookie || '') || [])[1];
+// The cookie outlives every session: how long a sign-in lasts is decided here on the server.
 const setCookie = (res, token) => res.setHeader('Set-Cookie',
-  `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token ? SESSION_DAYS * 86400 : 0}${process.env.COOKIE_SECURE === '1' ? '; Secure' : ''}`);
+  `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token ? 400 * 86400 : 0}${process.env.COOKIE_SECURE === '1' ? '; Secure' : ''}`);
 
 const readBody = (req) => new Promise((resolve, reject) => {
   const chunks = [];
@@ -128,21 +114,50 @@ function bucket(key, ms) {
 
 // ---- the gym's own records
 
-// Runs `fn` on the signed-in gym's document and saves it. Changes to one gym never overlap.
-const write = (fn) => (c) => db.change(`gym:${c.user.gymId}`, (doc) => fn({ ...c, doc }));
-const find = (list, id, what) => list.find((x) => x.id === id) || fail(404, `${what} not found.`);
-const pay = (doc, member, sum, mode, date) => {
-  if (sum > 0) doc.payments.push({ id: newId(), memberId: member.id, name: member.name, amount: sum, date, mode: MODES.includes(mode) ? mode : 'Cash' });
+// Changes to one gym wait for the one before, so a double tap cannot add a member or take a payment twice over.
+// ponytail: the queue is in this process, so run one copy of the server.
+const queues = new Map();
+const write = (fn) => (c) => {
+  const run = (queues.get(c.gymId) || Promise.resolve()).then(() => fn(c));
+  queues.set(c.gymId, run.catch(() => {}));
+  return run;
 };
 
+// A member as the screens and the reminders read one: who they are, the period running now, what it cost with
+// anything still owed from earlier periods, and what has been paid since it began. So fee - paid is what they owe.
+function memberOf(c, periods, paid) {
+  periods.sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
+  const now = periods.at(-1), paidNow = sum(paid.filter((t) => t.membershipId === now._id), 'amount');
+  const { _id, gymId, ...who } = c;
+  return { id: _id, ...who, membershipId: now._id, pt: now.pt, diet: now.diet, months: now.months, start: now.start, end: now.end,
+    fee: sum(periods, 'fee') - sum(paid, 'amount') + paidNow, paid: paidNow, history: periods.slice(0, -1).map(({ months, start, end, fee }) => ({ months, start, end, fee })) };
+}
+async function memberById(gymId, id) {
+  const [c] = await db.find('customers', { _id: id, gymId });
+  if (!c) fail(404, 'Member not found.');
+  return memberOf(c, await db.find('memberships', { gymId, customerId: id }), await db.find('transactions', { gymId, customerId: id }));
+}
+// Everything of one gym.
+async function loadGym(account) {
+  const [customers, periods, paid] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id })));
+  paid.sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
+  return { gym: account.details, sent: account.sent,
+    members: customers.map((c) => memberOf(c, periods.filter((p) => p.customerId === c._id), paid.filter((t) => t.customerId === c._id))),
+    payments: paid.map((t) => ({ id: t._id, memberId: t.customerId, name: t.name, amount: t.amount, date: t.date, mode: t.mode })) };
+}
+const pay = (gymId, customerId, name, membershipId, amt, mode, date) => amt > 0 && db.insert('transactions',
+  { _id: newId(), gymId, customerId, membershipId, name, amount: amt, mode: MODES.includes(mode) ? mode : 'Cash', date, createdAt: stamp() });
+
 // What the owner may type or say about a member, apart from the plan and the money.
-function details(b, doc, self) {
-  const t = ai.tidy(b, doc.gym), phone = phoneOf(b.phone);
-  const other = doc.members.find((m) => m.phone === phone && m !== self);
+async function details(b, account, selfId) {
+  const t = ai.tidy(b, account.details), phone = phoneOf(b.phone);
+  const other = (await db.find('customers', { gymId: account._id, phone })).find((c) => c._id !== selfId);
   if (other) fail(409, `${other.name} already has this mobile number.`);
   return { name: required(b.name, 'The name', 80), phone, gender: t.gender || '', age: t.age || '', weight: t.weight || '', height: t.height || '', goal: t.goal || '',
-    health: t.health || '', batch: t.batch || '', pt: b.pt === true, diet: b.diet === true, notes: G.str(b.notes, 500) };
+    health: t.health || '', batch: t.batch || '', notes: G.str(b.notes, 500) };
 }
+// A trainer and a diet plan belong to the period bought. A renewal keeps the last choice unless told otherwise.
+const extras = (b, last = {}) => ({ pt: b.pt === undefined ? !!last.pt : b.pt === true, diet: b.diet === undefined ? !!last.diet : b.diet === true });
 // A membership period and its fee. The fee is the gym's own price unless the owner typed another.
 function period(b, gym, today, more) {
   const months = G.PLANS.includes(Number(b.months)) ? Number(b.months) : fail(400, 'Choose 1, 3, 6 or 12 months.');
@@ -152,145 +167,191 @@ function period(b, gym, today, more) {
   if (paid > fee) fail(400, 'The amount paid is more than the fee.');
   return { months, start, end: G.endOf(start, months), fee, paid };
 }
+// A period is only ever added, never changed: each one a member buys is its own document.
+async function addPeriod(gymId, customerId, name, body, gym, today, more) {
+  const { paid, ...plan } = period(body, gym, today, more), _id = newId();
+  await db.insert('memberships', { _id, gymId, customerId, ...plan, ...more, createdAt: stamp() });
+  return () => pay(gymId, customerId, name, _id, paid, body.mode, today);
+}
 const gymFields = (b) => ({
   name: required(b.name, 'The gym name', 80), owner: G.str(b.owner, 80), phone: G.str(b.phone, 30), address: G.str(b.address, 300), timings: G.str(b.timings, 150),
   amenities: G.str(b.amenities, 400), upi: G.str(b.upi, 80), ...Object.fromEntries(['price1', 'price3', 'price6', 'price12', 'ptPrice', 'dietPrice'].map((k) => [k, amount(b[k] || 0, 'A price')])),
 });
 
-const admin = (fn) => (c) => (isAdmin(c.user) ? fn(c) : fail(403, 'Only the owner of this GymSaathi service can do that.'));
-
 const open = {
   'POST /api/auth/login': async ({ body, req, res }) => {
-    const email = G.str(body.email, 100).toLowerCase();
+    const email = G.str(body.email, 100).toLowerCase(), password = typeof body.password === 'string' ? body.password : '';
     // Counted per username, and per address across usernames, before any password is worked on.
     const tries = bucket(`login ${clientOf(req)} ${email}`, 15 * 60e3), all = bucket(`login ${clientOf(req)}`, 15 * 60e3);
     if (tries.n >= 10 || all.n >= 50) fail(429, 'Too many wrong attempts. Try again in 15 minutes.');
-    const user = typeof body.password === 'string' && await verifyUser(email, body.password);
-    if (!user) { tries.n++; all.n++; fail(401, 'Wrong username or password.'); }
-    if (user.disabled) fail(403, 'This account is switched off. Contact GymSaathi to switch it back on.');
-    setCookie(res, await createSession(user.id));
+    const owner = !!email && email === adminEmail(), [g] = owner ? [] : await db.find('gyms', { email });
+    // The same work is done for an unknown name, so the time taken does not say which names exist.
+    const { hash } = hashed(password, g ? g.salt : '00');
+    if (!(owner ? adminOk(password) : g && same(hash, g.hash))) { tries.n++; all.n++; fail(401, 'Wrong username or password.'); }
+    const token = crypto.randomBytes(32).toString('hex'), at = stamp();
+    if (owner) await db.insert('sessions', { _id: sha256(token), admin: true, until: Date.now() + OWNER_DAYS * 864e5 });
+    else {
+      if (g.disabled) fail(403, 'This account is switched off. Contact GymSaathi to switch it back on.');
+      // The free month starts at the first sign-in, on top of anything already paid for.
+      const validTill = g.firstLoginAt ? g.validTill : monthsAfter(g.validTill > at ? g.validTill : at, TRIAL_MONTHS);
+      if (at >= validTill) fail(402, over(g));
+      await db.update('gyms', { _id: g._id }, { firstLoginAt: g.firstLoginAt || at, lastLoginAt: at, validTill });
+      await db.insert('sessions', { _id: sha256(token), gymId: g._id, loginAt: at });
+    }
+    setCookie(res, token);
   },
   'POST /api/auth/logout': async ({ req, res }) => {
     const token = cookieOf(req);
-    if (token) await endSessions((s, k) => k === sha256(token));
+    if (token) await db.remove('sessions', { _id: sha256(token) });
     setCookie(res, '');
   },
 };
 
-const authed = {
-  'GET /api/data': async ({ user }) => {
-    const doc = await db.get(`gym:${user.gymId}`), today = G.todayISO();
-    return { user: { id: user.id, email: user.email, admin: isAdmin(user) }, gym: doc.gym, members: doc.members, payments: doc.payments, sent: doc.sent[today] || {}, aiEnabled: ai.aiEnabled() };
+// For a gym, and for the owner of the service with or without a gym opened.
+const either = {
+  'GET /api/data': async ({ admin, account }) => {
+    const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
+    if (!account) return { user, gym: null, members: [], payments: [], sent: {}, price: PRICE, aiEnabled: ai.aiEnabled() };
+    const data = await loadGym(account);
+    return { user, ...data, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, payNote: payNote(), aiEnabled: ai.aiEnabled() };
   },
-  'POST /api/auth/password': async ({ body, user, req }) => {
-    if (typeof body.current !== 'string' || !(await verifyUser(user.email, body.current))) fail(400, 'The current password is not right.');
-    const next = hashed(newPassword(body.password));
-    await db.change('users', (users) => Object.assign(users.find((u) => u.id === user.id), next), []);
-    await endSessions((s, k) => s.userId === user.id && k !== sha256(cookieOf(req))); // every other device is signed out
+};
+
+const gymRoutes = {
+  'POST /api/auth/password': async ({ body, account, gymId, req }) => {
+    if (typeof body.current !== 'string' || !same(hashed(body.current, account.salt).hash, account.hash)) fail(400, 'The current password is not right.');
+    await db.update('gyms', { _id: gymId }, hashed(newPassword(body.password)));
+    const mine = sha256(cookieOf(req) || ''); // every other device is signed out
+    for (const s of await db.find('sessions', { gymId })) if (s._id !== mine) await db.remove('sessions', { _id: s._id });
   },
-  'PUT /api/gym': async (c) => {
-    const gym = await write(({ doc, body }) => Object.assign(doc.gym, gymFields(body)))(c);
-    await db.change('users', (users) => { users.find((u) => u.id === c.user.id).gymName = gym.name; }, []);
-    return gym;
+  'PUT /api/gym': async ({ body, gymId }) => {
+    const next = gymFields(body);
+    await db.update('gyms', { _id: gymId }, { details: next });
+    return next;
   },
 
   // A new member: who they are, the plan they took and what they paid today. Whatever is left unpaid is asked for
   // every day by the reminders.
-  'POST /api/members': write(({ doc, body }) => {
-    const today = G.todayISO(), who = details(body, doc);
-    const member = { id: newId(), ...who, ...period(body, doc.gym, today, who), joinedAt: today, history: [] };
-    doc.members.push(member);
-    pay(doc, member, member.paid, body.mode, today);
-    return member;
+  'POST /api/members': write(async ({ body, account, gymId }) => {
+    const today = G.todayISO(), who = await details(body, account), id = newId();
+    // The period goes in before the member, so a failure in between leaves nothing half-made on the screens.
+    const payNow = await addPeriod(gymId, id, who.name, body, account.details, today, extras(body));
+    await db.insert('customers', { _id: id, gymId, ...who, joinedAt: today });
+    await payNow();
+    return memberById(gymId, id);
   }),
-  'PUT /api/members/:id': write(({ doc, body, id }) => { const m = find(doc.members, id, 'Member'); return Object.assign(m, details(body, doc, m)); }),
-  'DELETE /api/members/:id': write(({ doc, id }) => {
-    find(doc.members, id, 'Member');
-    doc.members = doc.members.filter((m) => m.id !== id);
-    doc.payments = doc.payments.filter((p) => p.memberId !== id);
+  'PUT /api/members/:id': write(async ({ body, account, gymId, id }) => {
+    await memberById(gymId, id);
+    await db.update('customers', { _id: id, gymId }, await details(body, account, id));
+    return memberById(gymId, id);
   }),
-  // A new period. The one that ends is kept in the member's history; anything still owed on it is carried over.
-  'POST /api/members/:id/renew': write(({ doc, body, id }) => {
-    const m = find(doc.members, id, 'Member'), today = G.todayISO(), owed = G.due(m);
-    const pt = body.pt === undefined ? m.pt : body.pt === true, diet = body.diet === undefined ? m.diet : body.diet === true;
+  'DELETE /api/members/:id': write(async ({ gymId, id }) => {
+    await memberById(gymId, id);
+    await db.remove('customers', { _id: id, gymId });
+    await db.remove('memberships', { gymId, customerId: id });
+    await db.remove('transactions', { gymId, customerId: id });
+  }),
+  // A new period, added beside the earlier ones. Anything still owed on those stays owed.
+  'POST /api/members/:id/renew': write(async ({ body, account, gymId, id }) => {
+    const m = await memberById(gymId, id), today = G.todayISO();
     // It starts the day after the old one ends, or today when that day has passed.
-    const next = period({ ...body, start: body.start || (m.end >= today ? G.addDays(m.end, 1) : today) }, doc.gym, today, { pt, diet });
-    m.history.push({ months: m.months, start: m.start, end: m.end, fee: m.fee, paid: m.paid });
-    Object.assign(m, next, { pt, diet, fee: next.fee + owed });
-    pay(doc, m, m.paid, body.mode, today);
-    return m;
+    const payNow = await addPeriod(gymId, id, m.name, { ...body, start: body.start || (m.end >= today ? G.addDays(m.end, 1) : today) }, account.details, today, extras(body, m));
+    await payNow();
+    return memberById(gymId, id);
   }),
-  'POST /api/members/:id/pay': write(({ doc, body, id }) => {
-    const m = find(doc.members, id, 'Member'), sum = amount(body.amount, 'The amount');
-    if (sum <= 0 || sum > G.due(m)) fail(400, `${m.name} owes ${G.money(G.due(m))}. Enter an amount up to that.`);
-    m.paid += sum;
-    pay(doc, m, sum, body.mode, body.date ? dateOf(body.date, 'The date') : G.todayISO());
-    return m;
+  'POST /api/members/:id/pay': write(async ({ body, gymId, id }) => {
+    const m = await memberById(gymId, id), amt = amount(body.amount, 'The amount');
+    if (amt <= 0 || amt > G.due(m)) fail(400, `${m.name} owes ${G.money(G.due(m))}. Enter an amount up to that.`);
+    await pay(gymId, id, m.name, m.membershipId, amt, body.mode, body.date ? dateOf(body.date, 'The date') : G.todayISO());
+    return memberById(gymId, id);
   }),
   // Noted when the owner opens WhatsApp for a reminder, so the same one is not offered again that day.
-  'POST /api/reminders/sent': write(({ doc, body }) => {
-    const today = G.todayISO(), m = find(doc.members, G.str(body.memberId, 40), 'Member');
+  'POST /api/reminders/sent': write(async ({ body, gymId }) => {
+    const today = G.todayISO(), m = await memberById(gymId, G.str(body.memberId, 40));
     if (!['fees', 'expiring', 'expired', 'welcome'].includes(body.type)) fail(400, 'Unknown reminder.');
-    doc.sent = { [today]: { ...(doc.sent[today] || {}), [`${m.id}:${body.type}`]: true } }; // older days are dropped
+    const { sent } = await gymById(gymId);
+    await db.update('gyms', { _id: gymId }, { sent: { [today]: { ...(sent[today] || {}), [`${m.id}:${body.type}`]: true } } }); // older days are dropped
   }),
 
   // The assistant. Each is limited per gym, since every call may reach the AI.
-  'POST /api/register/turn': async ({ body, user }) => {
-    if (bucket(`ai ${user.gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot at once. Wait a minute and go on.');
-    const doc = await db.get(`gym:${user.gymId}`);
-    return ai.turn({ gym: doc.gym, form: body.form && typeof body.form === 'object' ? body.form : {}, asked: G.str(body.asked, 20), said: G.str(body.said, 500), tries: Number(body.tries) || 0 });
+  'POST /api/register/turn': async ({ body, account, gymId }) => {
+    if (bucket(`ai ${gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot at once. Wait a minute and go on.');
+    return ai.turn({ gym: account.details, form: body.form && typeof body.form === 'object' ? body.form : {}, asked: G.str(body.asked, 20), said: G.str(body.said, 500), tries: Number(body.tries) || 0 });
   },
-  'POST /api/chat': async ({ body, user }) => {
+  'POST /api/chat': async ({ body, account, gymId }) => {
     const quick = body.quick === true;
-    if (!quick && bucket(`ai ${user.gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot of questions. Wait a minute and ask again.');
-    return ai.chat({ question: required(body.question, 'A question', 500), db: await db.get(`gym:${user.gymId}`), quick });
+    if (!quick && bucket(`ai ${gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot of questions. Wait a minute and ask again.');
+    return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), quick });
   },
 
   // Sample members, for looking around an empty gym.
-  'POST /api/seed': write(({ doc }) => {
-    if (doc.members.length) fail(400, 'Sample data is only for an empty gym.');
-    const today = G.todayISO();
-    Object.assign(doc.gym, { owner: doc.gym.owner || 'Vikram Singh', timings: doc.gym.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: doc.gym.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
-      price1: doc.gym.price1 || 1000, price3: doc.gym.price3 || 2700, price12: doc.gym.price12 || 9000, ptPrice: doc.gym.ptPrice || 2000, dietPrice: doc.gym.dietPrice || 500 });
+  'POST /api/seed': write(async ({ account, gymId }) => {
+    if ((await db.find('customers', { gymId })).length) fail(400, 'Sample data is only for an empty gym.');
+    const today = G.todayISO(), d = account.details;
+    await db.update('gyms', { _id: gymId }, { details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
+      price1: d.price1 || 1000, price3: d.price3 || 2700, price12: d.price12 || 9000, ptPrice: d.ptPrice || 2000, dietPrice: d.dietPrice || 500 } });
     const rows = [['Rahul Sharma', '9829011101', 3, -80, 2700, 2700], ['Priya Jain', '9829011102', 1, -27, 1000, 1000], ['Amit Soni', '9829011103', 1, -2, 1000, 0],
       ['Neha Agarwal', '9829011104', 12, -200, 9000, 5000], ['Suresh Mali', '9829011105', 1, -40, 1000, 1000], ['Kavita Rathore', '9829011106', 3, -10, 2700, 2700],
       ['Deepak Kothari', '9829011107', 1, 0, 3000, 1000], ['Sunita Vyas', '9829011108', 1, -29, 1000, 1000]];
     for (const [name, phone, months, ago, fee, paid] of rows) {
-      const start = G.addDays(today, ago), m = { id: newId(), name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', pt: fee === 3000, diet: false, notes: '',
-        months, start, end: G.endOf(start, months), fee, paid, joinedAt: start, history: [] };
-      doc.members.push(m);
-      pay(doc, m, paid, 'Cash', start);
+      const start = G.addDays(today, ago), id = newId(), membershipId = newId();
+      await db.insert('memberships', { _id: membershipId, gymId, customerId: id, months, start, end: G.endOf(start, months), fee, pt: fee === 3000, diet: false, createdAt: stamp() });
+      await db.insert('customers', { _id: id, gymId, name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', notes: '', joinedAt: start });
+      await pay(gymId, id, name, membershipId, paid, 'Cash', start);
     }
-  }),
-
-  // The service owner's Accounts page: one login per gym.
-  'GET /api/admin/users': admin(async () => ((await db.get('users')) || []).map((u) => ({ id: u.id, email: u.email, gym: u.gymName, createdAt: u.createdAt, disabled: !!u.disabled }))),
-  'POST /api/admin/users': admin(async ({ body }) => {
-    const made = await createUser(loginName(body.email), newPassword(body.password), required(body.gymName, 'The gym name', 80));
-    return made ? { id: made.id } : fail(409, 'That username is already taken.');
-  }),
-  'PUT /api/admin/users/:id': admin(async ({ body, id, user }) => {
-    if (id === user.id) fail(400, 'Change your own password under Settings.');
-    if (body.password === undefined && typeof body.disabled !== 'boolean') fail(400, 'Nothing to change.');
-    const next = body.password === undefined ? {} : hashed(newPassword(body.password));
-    await db.change('users', (users) => {
-      const u = users.find((x) => x.id === id) || fail(404, 'Account not found.');
-      Object.assign(u, next, typeof body.disabled === 'boolean' && { disabled: body.disabled });
-    }, []);
-    await endSessions((s) => s.userId === id); // a new password or a switched-off account signs that gym out everywhere
   }),
 };
 
-async function api(req, res, pathname) {
+// The service owner's Accounts page: every gym, its login, its time left and its numbers.
+const adminRoutes = {
+  'GET /api/admin/gyms': async () => {
+    // ponytail: reads every member and payment of every gym to add them up; count in the database when that gets slow.
+    const [gyms, customers, periods, paid] = await Promise.all(['gyms', 'customers', 'memberships', 'transactions'].map((name) => db.find(name)));
+    const of = (list, g) => list.filter((x) => x.gymId === g._id);
+    return gyms.map((g) => {
+      const got = sum(of(paid, g), 'amount');
+      return { id: g._id, email: g.email, gym: g.details.name, owner: g.details.owner, phone: g.details.phone, createdAt: g.createdAt, disabled: g.disabled, firstLoginAt: g.firstLoginAt,
+        lastLoginAt: g.lastLoginAt, validTill: g.validTill, paidMonths: sum(g.renewals, 'months'), members: of(customers, g).length, collected: got, due: sum(of(periods, g), 'fee') - got };
+    });
+  },
+  'POST /api/admin/gyms': async ({ body }) => {
+    const made = await createGym(loginName(body.email), newPassword(body.password), required(body.gymName, 'The gym name', 80));
+    return made ? { id: made._id } : fail(409, 'That username is already taken.');
+  },
+  'PUT /api/admin/gyms/:id': async ({ body, id }) => {
+    const g = (await gymById(id)) || fail(404, 'Gym not found.');
+    if ([1, 12].includes(body.addMonths)) {
+      // The gym paid: it runs that many months more, from the day its time ends, or from now when that has passed.
+      const at = stamp(), till = monthsAfter(g.validTill > at ? g.validTill : at, body.addMonths);
+      await db.update('gyms', { _id: id }, { validTill: till, renewals: [...g.renewals, { at, months: body.addMonths, till }] });
+      return { validTill: till };
+    }
+    if (body.password === undefined && typeof body.disabled !== 'boolean') fail(400, 'Nothing to change.');
+    await db.update('gyms', { _id: id }, { ...(body.password !== undefined && hashed(newPassword(body.password))), ...(typeof body.disabled === 'boolean' && { disabled: body.disabled }) });
+    await db.remove('sessions', { gymId: id }); // a new password or a switched-off account signs that gym out everywhere
+    return undefined;
+  },
+};
+
+async function api(req, res, url) {
   let id;
-  const key = `${req.method} ${pathname.replace(/\/[a-f0-9]{16}(?=\/|$)/, (m) => { id = m.slice(1); return '/:id'; })}`;
-  const route = open[key] || authed[key];
+  const key = `${req.method} ${url.pathname.replace(/\/[a-f0-9]{16}(?=\/|$)/, (m) => { id = m.slice(1); return '/:id'; })}`;
+  const route = open[key] || either[key] || gymRoutes[key] || adminRoutes[key];
   if (!route) fail(404, 'Not found.');
   // Browsers cannot send this content type across sites without a preflight: with the SameSite cookie, that is the CSRF defence.
   if (req.method !== 'GET' && !/^application\/json\b/i.test(req.headers['content-type'] || '')) fail(415, 'Send the request as application/json.');
-  const body = req.method === 'GET' ? {} : await readJsonBody(req);
-  const user = open[key] ? null : (await sessionUser(cookieOf(req))) || fail(401, 'Please sign in.');
-  const out = await route({ req, res, body, id, user });
+  const c = { req, res, id, body: req.method === 'GET' ? {} : await readJsonBody(req) };
+  if (!open[key]) {
+    const who = (await sessionOf(cookieOf(req))) || fail(401, 'Please sign in.');
+    c.admin = !!who.admin;
+    if (adminRoutes[key] && !c.admin) fail(403, 'Only the owner of this GymSaathi service can do that.');
+    // The owner of the service opens any gym by naming it (?gym=<id>) and then sees and does what that gym can.
+    const view = c.admin && url.searchParams.get('gym');
+    c.account = view ? (/^[a-f0-9]{16}$/.test(view) && await gymById(view)) || fail(404, 'Gym not found.') : who.account;
+    if (gymRoutes[key] && !c.account) fail(400, 'Open a gym from the Accounts page first.');
+    c.gymId = c.account && c.account._id;
+  }
+  const out = await route(c);
   if (!res.headersSent) json(res, 200, out || { ok: true });
 }
 
@@ -311,10 +372,13 @@ function serveStatic(req, res, pathname) {
 }
 
 async function start(port) {
-  await ensureAdmin();
+  await db.ready; // a wrong MONGODB_URI stops the server here, with the reason, instead of failing every request
+  if (!adminEmail() || (process.env.ADMIN_PASSWORD || '').length < 8) console.log('Set ADMIN_EMAIL and ADMIN_PASSWORD (8 characters or more): without them nobody can create gym logins.');
   const server = http.createServer((req, res) => {
-    const pathname = req.url.split('?')[0];
-    Promise.resolve().then(() => (pathname.startsWith('/api/') ? api(req, res, pathname) : serveStatic(req, res, pathname))).catch((e) => {
+    Promise.resolve().then(() => {
+      const url = new URL(req.url.split('#')[0], 'http://localhost');
+      return url.pathname.startsWith('/api/') ? api(req, res, url) : serveStatic(req, res, url.pathname);
+    }).catch((e) => {
       const status = e && e.httpStatus;
       if (!status) console.error(e); // the stack stays in the log, never in the response
       if (res.headersSent) res.destroy();

@@ -7,7 +7,9 @@ const main = $('#main'), dlg = $('#dialog');
 
 let S = null;         // the GET /api/data payload; null when signed out
 let current = '';     // route name on screen
-let accounts = null;  // the owner's list of gym logins
+let accounts = null;  // the owner's list of gyms
+let view = '';        // the gym the owner of the service has opened; every call then carries ?gym=<id>
+let notice = '';      // why the gym was signed out: its free trial or its plan is over
 let F = { tab: '', q: '' };
 const views = {};     // route name -> (id, query) => html
 const actions = {};   // data-action name -> (el, event) => void | Promise
@@ -57,10 +59,12 @@ const waBtn = (m, type, label, cls = 'secondary') => `<a class="btn ${cls}" targ
 async function api(method, path, body) {
   // Every write carries a JSON content type: the server's CSRF defence rejects anything else.
   const init = method === 'GET' ? {} : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) };
-  const res = await fetch(path, init).catch(() => { throw new Error('Could not reach the server. Check your connection and try again.'); });
+  const res = await fetch(view ? `${path}?gym=${view}` : path, init).catch(() => { throw new Error('Could not reach the server. Check your connection and try again.'); });
   const data = await res.json().catch(() => ({}));
   if (res.ok) return data;
-  if (res.status === 401 && S) { setData(null); location.hash = '#/login'; } // the session ended while working
+  if (res.status === 402) notice = data.error; // the time this gym had is over: the sign-in page says so
+  if ((res.status === 401 || res.status === 402) && S) { setData(null); location.hash = '#/login'; } // the session ended while working
+  else if (res.status === 402) route();
   throw Object.assign(new Error(data.error || `Something went wrong (${res.status}).`), { status: res.status });
 }
 
@@ -74,6 +78,7 @@ function setData(data) {
     stopVoice();
     if (dlg.open) dlg.close();
   }
+  if (!data) view = '';
   S = data;
 }
 async function refresh() { setData(await api('GET', '/api/data')); }
@@ -87,17 +92,27 @@ function route() {
   document.body.className = S ? '' : 'auth';
   if (!S) {
     if (name !== 'login') return location.replace('#/login');
-    main.innerHTML = authView;
+    main.innerHTML = authView();
     return undefined;
   }
-  $('#navAccounts').hidden = !S.user.admin;
-  if (!Object.hasOwn(views, name)) return location.replace('#/dashboard');
+  // The owner of the service has the Accounts page, and a gym's own pages once one is opened from there.
+  if (!Object.hasOwn(views, name) || (!S.gym && name !== 'accounts')) return location.replace(S.gym ? '#/dashboard' : '#/accounts');
   current = name;
   main.innerHTML = views[name](id, new URLSearchParams(query)) || notFound;
+  // In its last five days a gym is told on its dashboard that its time is ending, and what to pay.
+  const left = S.validTill ? Math.ceil((Date.parse(S.validTill) - Date.now()) / 864e5) : 99;
+  if (name === 'dashboard' && !view && left <= 5) {
+    main.insertAdjacentHTML('afterbegin', `<p class="pay-note">Your ${S.paying ? 'plan' : 'free trial'} ends ${left <= 1 ? 'today' : `in ${left} days`}, on ${esc(G.fmtDate(G.todayISO(new Date(S.validTill))))}.
+      Pay ${money(S.price)} to keep GymSaathi running. ${esc(S.payNote)}</p>`);
+  }
   for (const a of document.querySelectorAll('.sidebar nav a')) {
+    a.hidden = a.id === 'navAccounts' ? !S.user.admin : !S.gym;
     if (a.hash === `#/${name}`) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
-  $('#gymName').textContent = S.gym.name;
+  $('#gymName').textContent = S.gym ? S.gym.name : 'All gyms';
+  $('#planNote').textContent = S.gym && S.validTill ? `${S.paying ? 'Plan' : 'Free trial'} till ${G.fmtDate(G.todayISO(new Date(S.validTill)))}` : '';
+  $('#viewClose').hidden = !view;
+  $('#signOut').hidden = !S.user.admin; // a gym stays signed in until its time is over
   document.title = `${name === 'bolo' ? 'Assistant' : cap(name)} - GymSaathi`;
   if (name === 'bolo') renderTalk();
   return undefined;
@@ -162,11 +177,12 @@ Object.assign(actions, {
 
 // ---- sign in
 
-const authView = `
+const authView = () => `
   <form class="card auth-card" data-action="login">
     <div><div class="wordmark"><img class="mark" src="/favicon.svg" alt="" width="24" height="24">GymSaathi</div>
       <p class="tagline">Run your gym by talking</p></div>
     <div><h1>Sign in</h1><p class="muted">Welcome back.</p></div>
+    ${notice ? `<p class="pay-note" role="alert">${esc(notice)}</p>` : ''}
     ${field('Username', '<input name="email" required maxlength="100" autocomplete="username" autocapitalize="none" spellcheck="false">')}
     ${field('Password', '<input name="password" type="password" required autocomplete="current-password">')}
     <button class="btn primary">Sign in</button>
@@ -176,14 +192,18 @@ const authView = `
 Object.assign(actions, {
   async login(form) {
     await api('POST', '/api/auth/login', fd(form));
+    notice = '';
     await refresh();
     go('#/dashboard');
   },
   async logout() {
+    view = '';
     await api('POST', '/api/auth/logout');
     setData(null);
     go('#/login');
   },
+  async 'view-open'(el) { view = el.dataset.id; await refresh(); go('#/dashboard'); },
+  async 'view-close'() { view = ''; await refresh(); go('#/accounts'); },
 });
 
 // ---- dashboard
@@ -240,13 +260,14 @@ const memberForm = (m, plan) => `<div class="grid">
   ${field('Goal', input('goal', m.goal, 'maxlength="100"'))}
   ${field('Health problem, injury', input('health', m.health, 'maxlength="150"'))}
   ${field('Batch', input('batch', m.batch, 'maxlength="40" placeholder="Morning or Evening"'))}
-  <div class="row">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
-  ${plan ? `${field('Plan', `<select name="months">${opts(plansOf(), m.months || 1)}</select>`)}
+  ${plan ? `<div class="row">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
+  ${field('Plan', `<select name="months">${opts(plansOf(), m.months || 1)}</select>`)}
   ${field('Starts on', `<input type="date" name="start" value="${esc(m.start || today())}">`)}
   ${field('Fee (leave empty for the gym\'s price)', input('fee', m.fee == null ? '' : m.fee, NUM))}
   ${field('Paid now', input('paid', m.paid || '', NUM))}
   ${field('Paid by', `<select name="mode">${opts(MODES, 'Cash')}</select>`)}` : ''}</div>`;
-const memberBody = (form) => { const b = fd(form); return { ...b, pt: !!form.pt.checked, diet: !!form.diet.checked }; };
+// The trainer and the diet plan are part of a period bought, so they are asked with a plan and not on a correction.
+const memberBody = (form) => ({ ...fd(form), ...(form.pt && { pt: form.pt.checked, diet: form.diet.checked }) });
 
 views.members = (id) => {
   if (!id) {
@@ -282,7 +303,7 @@ views.members = (id) => {
         ${row('Health', m.health)}${row('Batch', m.batch)}${row('Joined', G.fmtDate(m.joinedAt))}${row('Notes', m.notes)}</tbody></table></div></section>
       <section class="card"><div class="card-head"><h2>Payments</h2></div>
         ${pays.length ? table(['Date', 'Paid by', '#Amount'], pays.map((p) => `<tr><td>${esc(G.fmtDate(p.date))}</td><td>${esc(p.mode)}</td><td class="num">${money(p.amount)}</td></tr>`)) : empty('No payment yet', '')}
-        ${m.history.length ? `<div class="card-body"><p class="hint">Earlier: ${m.history.map((h) => `${planName(h.months)} from ${esc(G.fmtDate(h.start))}`).join('; ')}</p></div>` : ''}
+        ${m.history.length ? `<div class="card-body"><p class="hint">Earlier memberships: ${m.history.map((h) => `${planName(h.months)}, ${esc(G.fmtDate(h.start))} to ${esc(G.fmtDate(h.end))}, ${money(h.fee)}`).join('; ')}</p></div>` : ''}
       </section>
     </div>`);
 };
@@ -520,8 +541,8 @@ views.settings = () => {
           ${price('ptPrice', 'Personal trainer, per month')}${price('dietPrice', 'Diet plan, per month')}</div></section>
       <div class="form-foot"><button class="btn primary">Save settings</button></div>
     </form>
-    <section class="card"><div class="card-head"><h2>Account</h2><span class="hint">Signed in as ${esc(S.user.email)}</span></div>
-      <div class="card-body actions"><button class="btn secondary" data-action="password-edit">Change password</button><button class="btn secondary" data-action="logout">Sign out</button></div></section>`);
+    ${view ? '' : `<section class="card"><div class="card-head"><h2>Account</h2><span class="hint">Signed in as ${esc(S.user.email)}</span></div>
+      <div class="card-body actions"><button class="btn secondary" data-action="password-edit">Change password</button></div></section>`}`);
 };
 const passwordField = (label, name, auto) => field(label, `<input name="${name}" type="password" required minlength="8" maxlength="200" autocomplete="${auto}">`, 'span2');
 
@@ -534,23 +555,47 @@ Object.assign(actions, {
   async 'password-save'(form) { await api('POST', '/api/auth/password', fd(form)); dlg.close(); toast('Password changed. Other devices are signed out.'); },
 });
 
-// ---- accounts (the owner of the service only)
+// ---- accounts (the owner of the service only): every gym, its time left and its numbers
 
-async function loadAccounts() { accounts = await api('GET', '/api/admin/users'); if (current === 'accounts') route(); }
+async function loadAccounts() { accounts = await api('GET', '/api/admin/gyms'); if (current === 'accounts') route(); }
+const daysLeft = (a) => (a.validTill ? Math.ceil((Date.parse(a.validTill) - Date.now()) / 864e5) : 99);
+// A WhatsApp message to a gym whose time is ending or over, asking for the month's payment.
+const askGym = (a) => { const d = daysLeft(a), kind = a.paidMonths ? 'प्लान' : 'फ्री ट्रायल', on = G.fmtDate(G.todayISO(new Date(a.validTill)));
+  return G.waLink(a.phone, `नमस्ते 🙏
+${a.gym} का GymSaathi ${kind} ${on} को ${d > 0 ? 'खत्म हो रहा है' : 'खत्म हो चुका है'}।
+सेवा चालू रखने के लिए ${G.money(S.price)} जमा करवा दें।
+धन्यवाद।`); };
+const when = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '');
+// Where a gym stands: switched off, never signed in, in its free month, paid up, or out of time.
+function planPill(a) {
+  if (a.disabled) return '<span class="pill overdue">Switched off</span>';
+  if (!a.firstLoginAt) return '<span class="pill partial">Not signed in yet</span>';
+  if (new Date(a.validTill) <= new Date()) return `<span class="pill overdue">${a.paidMonths ? 'Plan' : 'Free trial'} over</span>`;
+  return `<span class="pill ${a.paidMonths ? 'paid' : 'partial'}">${a.paidMonths ? 'Paid' : 'Free trial'}</span>`;
+}
 views.accounts = () => {
   if (!S.user.admin) return notFound;
   if (!accounts) {
     loadAccounts().catch((err) => toast(err.message, true));
-    return page('Accounts', '', `<div class="card">${empty('Loading accounts', 'One moment.')}</div>`);
+    return page('Accounts', '', `<div class="card">${empty('Loading gyms', 'One moment.')}</div>`);
   }
-  return page('Accounts', `<button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`, `
-    <div class="card">${table(['Gym', 'Username', 'Created', 'Status', ''], accounts.map((a) => `<tr>
-      <td>${esc(a.gym)}</td><td>${esc(a.email)}</td><td>${esc(G.fmtDate(String(a.createdAt).slice(0, 10)))}</td>
-      <td><span class="pill ${a.disabled ? 'overdue' : 'paid'}">${a.disabled ? 'Switched off' : 'Active'}</span></td>
-      <td class="num">${a.id === S.user.id ? '<span class="muted">You</span>' : `
+  const add = `<button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
+  if (!accounts.length) return page('Accounts', add, `<div class="card">${empty('No gym yet', 'Add a gym and give it its username and password. Its free month starts when it first signs in.', add)}</div>`);
+  return page('Accounts', add, `
+    <div class="card">${table(['Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], accounts.map((a) => `<tr>
+      <td><strong>${esc(a.gym)}</strong><br><span class="muted">${esc(a.email)}${a.owner ? ` · ${esc(a.owner)}` : ''}${a.phone ? ` · ${esc(a.phone)}` : ''}</span></td>
+      <td class="num">${a.members}</td><td class="num ${a.due > 0 ? 'low' : ''}">${money(a.due)}</td><td class="num">${money(a.collected)}</td>
+      <td>${esc(when(a.firstLoginAt)) || '<span class="muted">Never</span>'}${a.lastLoginAt && a.lastLoginAt !== a.firstLoginAt ? `<br><span class="muted">last ${esc(when(a.lastLoginAt))}</span>` : ''}</td>
+      <td>${planPill(a)}${a.validTill ? `<br><span class="muted">${esc(when(a.validTill))}</span>` : ''}</td>
+      <td class="num"><div class="actions">
+        <button class="btn primary" data-action="view-open" data-id="${esc(a.id)}">Open</button>
+        ${daysLeft(a) <= 5 && G.lastTen(a.phone).length === 10 ? `<a class="btn secondary" target="_blank" rel="noopener" href="${esc(askGym(a))}">Ask on WhatsApp</a>` : ''}
+        <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="1">Paid: +1 month</button>
+        <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="12">+1 year</button>
         <button class="btn secondary" data-action="account-password" data-id="${esc(a.id)}" data-name="${esc(a.email)}">Reset password</button>
-        <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button>`}</td></tr>`))}</div>
-    <p class="hint">Each gym signs in with its own username and sees only its own members. Switching a gym off signs it out and blocks its login; its data is kept.</p>`);
+        <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button></div></td></tr>`))}</div>
+    <p class="hint">A gym's free month starts at its first sign-in. When its time is over it is signed out and told to pay; press <strong>Paid</strong> when it has, and it can sign in again.
+      <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them.</p>`);
 };
 Object.assign(actions, {
   'account-new'() {
@@ -558,12 +603,24 @@ Object.assign(actions, {
       ${field('Username', input('email', '', 'required maxlength="100" autocapitalize="none" spellcheck="false"'), 'span2')}
       ${passwordField('Password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Create login'));
   },
-  async 'account-save'(form) { await api('POST', '/api/admin/users', fd(form)); dlg.close(); toast('Login created. Give the gym its username and password.'); await loadAccounts(); },
+  async 'account-save'(form) { await api('POST', '/api/admin/gyms', fd(form)); dlg.close(); toast('Login created. Give the gym its username and password.'); await loadAccounts(); },
+  'account-paid'(el) {
+    const months = Number(el.dataset.months);
+    openDialog(`<div class="dialog-body"><h2>${esc(el.dataset.name)} has paid?</h2><p class="muted">It gets ${months === 12 ? '1 year' : '1 month'} more. This is kept in its record.</p></div>
+      <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button>
+        <button class="btn primary" data-action="account-paid-yes" data-id="${esc(el.dataset.id)}" data-months="${months}">Yes, add ${months === 12 ? '1 year' : '1 month'}</button></footer>`);
+  },
+  async 'account-paid-yes'(el) {
+    const r = await api('PUT', `/api/admin/gyms/${el.dataset.id}`, { addMonths: Number(el.dataset.months) });
+    dlg.close();
+    toast(`Runs till ${when(r.validTill)}`);
+    await loadAccounts();
+  },
   'account-password'(el) {
     openDialog(dialogForm(`Reset password for ${el.dataset.name}`, 'account-password-save', el.dataset.id, `<div class="grid">${passwordField('New password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Set password'));
   },
-  async 'account-password-save'(form) { await api('PUT', `/api/admin/users/${form.dataset.id}`, { password: fd(form).password }); dlg.close(); toast('Password reset. That gym is signed out everywhere.'); },
-  async 'account-toggle'(el) { await api('PUT', `/api/admin/users/${el.dataset.id}`, { disabled: !!el.dataset.off }); toast(el.dataset.off ? 'Gym switched off' : 'Gym switched on'); await loadAccounts(); },
+  async 'account-password-save'(form) { await api('PUT', `/api/admin/gyms/${form.dataset.id}`, { password: fd(form).password }); dlg.close(); toast('Password reset. That gym is signed out everywhere.'); },
+  async 'account-toggle'(el) { await api('PUT', `/api/admin/gyms/${el.dataset.id}`, { disabled: !!el.dataset.off }); toast(el.dataset.off ? 'Gym switched off' : 'Gym switched on'); await loadAccounts(); },
 });
 
 // ---- start
@@ -572,7 +629,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     await refresh();
   } catch (err) {
-    if (err.status !== 401) {
+    if (err.status !== 401 && err.status !== 402) {
       main.innerHTML = `<div class="card">${empty('GymSaathi could not load', esc(err.message), '<button class="btn primary" data-action="retry">Try again</button>')}</div>`;
       return;
     }
