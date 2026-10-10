@@ -1,6 +1,8 @@
 // Fills a database of its own with many gyms and measures how the app holds up:
 //   node loadtest.js          50 gyms, each with 150 members, 500 memberships, 500 payments and 500 sign-ins
 //   node loadtest.js drop     removes that database again
+//   node loadtest.js live          puts the same 50 made-up gyms into the REAL database, beside the real gyms, to look at on the live site
+//   node loadtest.js live-remove   takes exactly those 50 out of the real database again, and nothing else
 // It uses the MongoDB that .env names but only ever the database 'gymsaathi_loadtest', never the real one, and it
 // leaves the data there so it can be looked at in Atlas. To open the app on it, start the server with
 // MONGODB_DB=gymsaathi_loadtest and sign in as load01 ... load50 with the password below.
@@ -10,7 +12,9 @@ const crypto = require('node:crypto');
 const DB_NAME = 'gymsaathi_loadtest';
 const PASSWORD = 'loadtest-password'; // for these made-up gyms only
 const GYMS = 50, MEMBERS = 150, SIGN_INS = 500;
-Object.assign(process.env, { MONGODB_DB: DB_NAME, ADMIN_EMAIL: 'owner', ADMIN_PASSWORD: 'owner-loadtest-password', GEMINI_API_KEY: '', WHATSAPP_TOKEN: '', REDIS_URL: '' });
+const MODE = process.argv[2] || '', LIVE = MODE.startsWith('live');
+// On the real database nothing of the environment is touched: it is whatever .env says.
+if (!LIVE) Object.assign(process.env, { MONGODB_DB: DB_NAME, ADMIN_EMAIL: 'owner', ADMIN_PASSWORD: 'owner-loadtest-password', GEMINI_API_KEY: '', WHATSAPP_TOKEN: '', REDIS_URL: '' });
 
 const server = require('./server'); // loads .env, where MONGODB_URI is
 const db = require('./lib/db');
@@ -26,9 +30,9 @@ const most = (times) => Math.round(Math.max(...times));
 
 // One gym as the app would have made it: its members, a chain of one-month periods for each, the payments for them
 // (40 members still owe part of the latest), and its sign-ins. Returns the documents and one sign-in to act as.
-function gymDocs(n, today) {
+function gymDocs(n, today, password = PASSWORD) {
   const gymId = id(), now = new Date().toISOString(), salt = crypto.randomBytes(16).toString('hex'), tag = String(n).padStart(2, '0');
-  const gym = { _id: gymId, email: `load${tag}`, salt, hash: crypto.scryptSync(PASSWORD, salt, 64).toString('hex'), createdAt: now, disabled: false, firstLoginAt: now, lastLoginAt: now,
+  const gym = { _id: gymId, email: `load${tag}`, salt, hash: crypto.scryptSync(password, salt, 64).toString('hex'), loadtest: true, createdAt: now, disabled: false, firstLoginAt: now, lastLoginAt: now,
     validTill: new Date(Date.now() + 30 * 864e5).toISOString(), renewals: [], sent: {},
     details: { name: `Load Gym ${tag}`, owner: `${FIRST[n % FIRST.length]} ${LAST[n % LAST.length]}`, phone: `98${String(29000000 + n)}`, address: 'Bhilwara', timings: '5 to 10, 4 to 10', amenities: 'Cardio, Weights', upi: '',
       price1: 1000, price3: 2700, price6: 5000, price12: 9000, ptPrice: 2000, dietPrice: 500 } };
@@ -49,22 +53,50 @@ function gymDocs(n, today) {
   return { gym, customers, memberships, transactions, sessions, token };
 }
 
+// Writes the gyms and all they hold. Returns what was made.
+async function fill(password) {
+  const today = G.todayISO(), made = [];
+  for (let n = 1; n <= GYMS; n++) made.push(gymDocs(n, today, password));
+  await db.insert('gyms', made.map((m) => m.gym));
+  for (const name of ['customers', 'memberships', 'transactions', 'sessions']) {
+    const all = made.flatMap((m) => m[name]);
+    for (let at = 0; at < all.length; at += 2000) await db.insert(name, all.slice(at, at + 2000));
+  }
+  return made;
+}
+
+// The real database: the made-up gyms go in beside the real ones, marked, and come out by that mark alone.
+async function live(base) {
+  if (!db.usingMongo || base.databaseName === DB_NAME) throw new Error('This needs MONGODB_URI in .env, and no MONGODB_DB pointing at the load-test database.');
+  const gyms = await db.find('gyms'), old = gyms.filter((g) => g.loadtest === true);
+  if (MODE === 'live-remove') {
+    for (const g of old) {
+      for (const name of ['sessions', 'backups', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: g._id });
+      await db.remove('gyms', { _id: g._id });
+    }
+    return console.log(`Took ${old.length} made-up gyms out of the database ${base.databaseName}. ${gyms.length - old.length} real gyms are untouched.`);
+  }
+  if (MODE !== 'live') throw new Error('Use: node loadtest.js live   or   node loadtest.js live-remove');
+  if (old.length) throw new Error(`${old.length} made-up gyms are already in ${base.databaseName}. Take them out first: node loadtest.js live-remove`);
+  if (gyms.some((g) => /^load[0-9][0-9]$/.test(g.email))) throw new Error('A real gym already uses a username like load01. Nothing was added.');
+  // Nobody can sign in as these: the password is random and kept nowhere. The owner of the service opens them from Accounts.
+  const made = await fill(crypto.randomBytes(24).toString('hex'));
+  return console.log(`Added ${made.length} made-up gyms to the database ${base.databaseName}: ${made.length * MEMBERS} members, ${made.reduce((n, m) => n + m.transactions.length, 0)} payments, ${made.length * SIGN_INS} sign-ins.
+They are named Load Gym 01 to ${GYMS}. Open them from the Accounts page. 'node loadtest.js live-remove' takes them out again.`);
+}
+
 async function main() {
   const base = await db.ready;
+  if (LIVE) return live(base);
   if (!db.usingMongo || base.databaseName !== DB_NAME) throw new Error('This needs MONGODB_URI in .env, and it only ever works on the load-test database.');
   if (process.argv[2] === 'drop') { await base.dropDatabase(); return console.log(`Removed the database ${DB_NAME}.`); }
 
   // ---- fill
   await base.dropDatabase();
   await db.indexes(); // dropping the database took its indexes along
-  const today = G.todayISO(), made = [];
+  const today = G.todayISO();
   let began = performance.now();
-  for (let n = 1; n <= GYMS; n++) made.push(gymDocs(n, today));
-  await db.insert('gyms', made.map((m) => m.gym));
-  for (const name of ['customers', 'memberships', 'transactions', 'sessions']) {
-    const all = made.flatMap((m) => m[name]);
-    for (let at = 0; at < all.length; at += 2000) await db.insert(name, all.slice(at, at + 2000));
-  }
+  const made = await fill(PASSWORD);
   const fillSeconds = Math.round((performance.now() - began) / 1000);
 
   // ---- measure, through the real server
