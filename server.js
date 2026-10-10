@@ -368,9 +368,12 @@ const adminRoutes = {
       await db.update('gyms', { _id: id }, { validTill: till, renewals: [...g.renewals, { at, months: body.addMonths, till }] });
       return { validTill: till };
     }
-    if (body.password === undefined && typeof body.disabled !== 'boolean') fail(400, 'Nothing to change.');
-    await db.update('gyms', { _id: id }, { ...(body.password !== undefined && hashed(newPassword(body.password))), ...(typeof body.disabled === 'boolean' && { disabled: body.disabled }) });
-    await db.remove('sessions', { gymId: id }); // a new password or a switched-off account signs that gym out everywhere
+    // The login: another username, another password (left empty it stays as it is), or the account switched off or on.
+    const email = body.email === undefined ? g.email : loginName(body.email), password = body.password || undefined;
+    if (email === g.email && password === undefined && typeof body.disabled !== 'boolean') fail(400, 'Nothing to change.');
+    if (email !== g.email && (email === adminEmail() || (await db.find('gyms', { email })).length)) fail(409, 'That username is already taken.');
+    await db.update('gyms', { _id: id }, { email, ...(password !== undefined && hashed(newPassword(password))), ...(typeof body.disabled === 'boolean' && { disabled: body.disabled }) });
+    await db.remove('sessions', { gymId: id }); // a changed login or a switched-off account signs that gym out everywhere
     return undefined;
   },
 };

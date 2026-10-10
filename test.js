@@ -218,6 +218,13 @@ async function apiChecks() {
       global.fetch = real;
     }
 
+    // The owner of the service can change a gym's username, to one nobody else has; an empty password keeps the old one
+    const third = (await ok(owner('POST', '/api/admin/gyms', { ...fitZone, name: 'Ox Fit', email: 'third.gym', password: 'first-password' }))).id;
+    assert.deepEqual([await status(owner('PUT', `/api/admin/gyms/${third}`, { email: 'fit.zone' })), await status(owner('PUT', `/api/admin/gyms/${third}`, { email: 'owner' })),
+      await status(owner('PUT', `/api/admin/gyms/${third}`, { email: 'third.gym', password: '' })), await status(owner('PUT', `/api/admin/gyms/${third}`, { email: 'OxFit', password: '' }))], [409, 409, 400, 200]);
+    assert.deepEqual([await status(browser()('POST', '/api/auth/login', { email: 'third.gym', password: 'first-password' })), await status(browser()('POST', '/api/auth/login', { email: 'Ox Fit', password: 'first-password' })),
+      await status(browser()('POST', '/api/auth/login', { email: 'oxfit', password: 'first-password' }))], [401, 401, 200]);
+
     // Passwords: the gym changes its own; the owner resets one and switches a gym off
     assert.equal(await status(gym('POST', '/api/auth/password', { current: 'wrong-one', password: 'second-password' })), 400);
     await ok(gym('POST', '/api/auth/password', { current: 'first-password', password: 'second-password' }));

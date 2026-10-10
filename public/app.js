@@ -186,7 +186,7 @@ const authView = () => `
     ${field('Username', '<input name="email" required maxlength="100" autocomplete="username" autocapitalize="none" spellcheck="false">')}
     ${field('Password', '<input name="password" type="password" required autocomplete="current-password">')}
     <button class="btn primary">Sign in</button>
-    <p class="muted">No login yet, or forgot your password? Ask GymSaathi.</p>
+    <p class="muted">Use the username GymSaathi gave you. It is not your gym's name. No login yet, or forgot it? Ask GymSaathi.</p>
   </form>`;
 
 Object.assign(actions, {
@@ -573,7 +573,8 @@ views.settings = () => {
 const passwordField = (label, name, auto) => field(label, `<input name="${name}" type="password" required minlength="8" maxlength="200" autocomplete="${auto}">`, 'span2');
 
 Object.assign(actions, {
-  async 'gym-save'(form) { await api('PUT', '/api/gym', fd(form)); toast('Settings saved'); await load(); },
+  // The owner of the service, editing a gym from the Accounts page, lands back on that page once it is saved.
+  async 'gym-save'(form) { await api('PUT', '/api/gym', fd(form)); toast('Settings saved'); return view ? actions['view-close']() : load(); },
   'password-edit'() {
     openDialog(dialogForm('Change password', 'password-save', '', `<div class="grid">${passwordField('Current password', 'current', 'current-password')}
       ${passwordField('New password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Change password'));
@@ -606,7 +607,7 @@ views.accounts = () => {
   if (!accounts.length) return page('Accounts', add, `<div class="card">${empty('No gym yet', 'Add a gym and give it its username and password. Its free month starts when it first signs in.', add)}</div>`);
   return page('Accounts', add, `
     <div class="card">${table(['Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], accounts.map((a) => `<tr>
-      <td><strong>${esc(a.gym)}</strong><br><span class="muted">${esc(a.email)}${a.owner ? ` · ${esc(a.owner)}` : ''}${a.phone ? ` · ${esc(a.phone)}` : ''}</span></td>
+      <td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: <strong>${esc(a.email)}</strong>${a.owner || a.phone ? `<br>${esc([a.owner, a.phone].filter(Boolean).join(' · '))}` : ''}</span></td>
       <td class="num">${a.members}</td><td class="num ${a.due > 0 ? 'low' : ''}">${money(a.due)}</td><td class="num">${money(a.collected)}</td>
       <td>${esc(when(a.firstLoginAt)) || '<span class="muted">Never</span>'}${a.lastLoginAt && a.lastLoginAt !== a.firstLoginAt ? `<br><span class="muted">last ${esc(when(a.lastLoginAt))}</span>` : ''}</td>
       <td>${planPill(a)}${a.validTill ? `<br><span class="muted">${esc(when(a.validTill))}</span>` : ''}</td>
@@ -616,7 +617,7 @@ views.accounts = () => {
         ${daysLeft(a) <= 5 && G.lastTen(a.phone).length === 10 ? `<a class="btn secondary" target="_blank" rel="noopener" href="${esc(askGym(a))}">Ask on WhatsApp</a>` : ''}
         <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="1">Paid: +1 month</button>
         <button class="btn secondary" data-action="account-paid" data-id="${esc(a.id)}" data-name="${esc(a.gym)}" data-months="12">+1 year</button>
-        <button class="btn secondary" data-action="account-password" data-id="${esc(a.id)}" data-name="${esc(a.email)}">Reset password</button>
+        <button class="btn secondary" data-action="account-password" data-id="${esc(a.id)}" data-name="${esc(a.email)}" data-gym="${esc(a.gym)}">Username, password</button>
         <button class="btn secondary" data-action="account-toggle" data-id="${esc(a.id)}" data-off="${a.disabled ? '' : '1'}">${a.disabled ? 'Switch on' : 'Switch off'}</button></div></td></tr>`))}</div>
     <p class="hint">A gym's free month starts at its first sign-in. When its time is over it is signed out and told to pay; press <strong>Paid</strong> when it has, and it can sign in again.
       <strong>Open</strong> shows a gym's members, fees and payments as the gym sees them. <strong>Edit details</strong> opens its name, owner, address, amenities and prices.</p>`);
@@ -642,9 +643,11 @@ Object.assign(actions, {
     await loadAccounts();
   },
   'account-password'(el) {
-    openDialog(dialogForm(`Reset password for ${el.dataset.name}`, 'account-password-save', el.dataset.id, `<div class="grid">${passwordField('New password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Set password'));
+    openDialog(dialogForm(`Login of ${el.dataset.gym}`, 'account-password-save', el.dataset.id, `<p class="hint">The gym signs in with this username and its password, not with the gym's name.</p><div class="grid">
+      ${field('Username', input('email', el.dataset.name, 'required maxlength="100" autocapitalize="none" spellcheck="false" autocomplete="off"'), 'span2')}
+      ${field('New password (leave empty to keep the old one)', '<input name="password" type="password" minlength="8" maxlength="200" autocomplete="new-password">', 'span2')}</div>`, 'Save login'));
   },
-  async 'account-password-save'(form) { await api('PUT', `/api/admin/gyms/${form.dataset.id}`, { password: fd(form).password }); dlg.close(); toast('Password reset. That gym is signed out everywhere.'); },
+  async 'account-password-save'(form) { await api('PUT', `/api/admin/gyms/${form.dataset.id}`, fd(form)); dlg.close(); toast('Login saved. That gym is signed out everywhere.'); await loadAccounts(); },
   async 'account-toggle'(el) { await api('PUT', `/api/admin/gyms/${el.dataset.id}`, { disabled: !!el.dataset.off }); toast(el.dataset.off ? 'Gym switched off' : 'Gym switched on'); await loadAccounts(); },
 });
 
