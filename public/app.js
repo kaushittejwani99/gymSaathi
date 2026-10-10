@@ -792,13 +792,19 @@ function backupDone(place) {
 // The box stays until the backup is saved: Esc does not close it, and leaving the page brings it back.
 dlg.addEventListener('cancel', (e) => { if (backupBox) e.preventDefault(); });
 dlg.addEventListener('close', () => { if (!dlg.open) backupBox = false; }); // a close that the box has already come back from does not count
+async function working(el, run) {
+  const label = el.innerHTML;
+  el.textContent = 'Making the backup… please wait';
+  try { return await run(); } finally { el.innerHTML = label; }
+}
 Object.assign(actions, {
-  async 'export-now'() { backupDone(await saveBackup(true)); },
-  async 'export-folder'() {
+  // Every gym's data takes the server some seconds to gather, so the button says that it is at work.
+  async 'export-now'(el) { backupDone(await working(el, () => saveBackup(true))); },
+  async 'export-folder'(el) {
     const folder = await window.showDirectoryPicker({ id: 'gymsaathi-backups', mode: 'readwrite' }).catch((e) => { if (e.name === 'AbortError') return null; throw e; });
     if (!folder) return;
     await kept('readwrite', (store) => store.put(folder, `folder:${me()}`));
-    backupDone(await saveBackup(true));
+    backupDone(await working(el, () => saveBackup(true)));
   },
 });
 // The card on Settings (a gym) and on Accounts (the owner of the service).
