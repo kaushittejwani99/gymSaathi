@@ -16,6 +16,7 @@ const ai = require('./lib/ai');
 const wa = require('./lib/whatsapp');
 
 const MAX_BODY = 256 * 1024;
+const MAX_FILE = 12 * 1024 * 1024; // a photo or a PDF of old records, sent once to be read
 const KEEP_DELETED_DAYS = 30;       // a deleted member or gym can be brought back for this long, then it goes for good
 const BACKUP_DAYS = Number(process.env.BACKUP_DAYS) || 7; // how many daily backups of each gym are kept
 const SEND_FROM = 6, SEND_TILL = 21; // reminders go out by themselves from 6 in the morning, and never at night
@@ -88,15 +89,15 @@ const cookieOf = (req) => (/(?:^|;\s*)sid=([a-f0-9]{64})/.exec(req.headers.cooki
 const setCookie = (res, token) => res.setHeader('Set-Cookie',
   `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token ? 400 * 86400 : 0}${process.env.COOKIE_SECURE === '1' ? '; Secure' : ''}`);
 
-const readBody = (req) => new Promise((resolve, reject) => {
+const readBody = (req, limit = MAX_BODY) => new Promise((resolve, reject) => {
   const chunks = [];
   let size = 0;
-  req.on('data', (chunk) => { size += chunk.length; if (size <= MAX_BODY) chunks.push(chunk); });
-  req.on('end', () => resolve(size > MAX_BODY ? null : Buffer.concat(chunks)));
+  req.on('data', (chunk) => { size += chunk.length; if (size <= limit) chunks.push(chunk); });
+  req.on('end', () => resolve(size > limit ? null : Buffer.concat(chunks)));
   req.on('error', reject);
 });
-async function readJsonBody(req) {
-  const raw = await readBody(req);
+async function readJsonBody(req, limit) {
+  const raw = await readBody(req, limit);
   if (!raw) fail(413, 'That is too much to send at once.');
   let body;
   try { body = raw.length ? JSON.parse(raw) : {}; } catch { body = null; }
@@ -238,12 +239,27 @@ function startReminders() {
 }
 
 // What the owner may type or say about a member, apart from the plan and the money.
-async function details(b, account, selfId) {
-  const t = ai.tidy(b, account.details), phone = phoneOf(b.phone);
-  const other = (await db.find('customers', { gymId: account._id, phone })).find((c) => c._id !== selfId && live(c));
-  if (other) fail(409, `${other.name} already has this mobile number.`);
+function person(b, gym) {
+  const t = ai.tidy(b, gym), phone = phoneOf(b.phone);
   return { name: required(b.name, 'The name', 80), phone, gender: t.gender || '', age: t.age || '', weight: t.weight || '', height: t.height || '', goal: t.goal || '',
     health: t.health || '', batch: t.batch || '', notes: G.str(b.notes, 500) };
+}
+async function details(b, account, selfId) {
+  const who = person(b, account.details);
+  const other = (await db.find('customers', { gymId: account._id, phone: who.phone })).find((c) => c._id !== selfId && live(c));
+  if (other) fail(409, `${other.name} already has this mobile number.`);
+  return who;
+}
+
+// ---- old records: a row the AI read from a file, made fit to look through and then to save
+
+// The length is what is written; else it is worked out from the first and last day; else one month.
+function oldRow(r, gym, today) {
+  const t = ai.tidy({ ...r, months: undefined, paid: undefined }, gym), start = G.isDate(r.start) && r.start >= '2000-01-01' && r.start <= today ? r.start : '';
+  const spanned = start && G.isDate(r.end) && r.end > start ? Math.round(G.daysBetween(start, r.end) / 30.4) : 0;
+  const months = G.okMonths(Number(r.months)) ? Number(r.months) : Math.min(36, Math.max(1, spanned));
+  const fee = Number(r.fee) > 0 && Number(r.fee) <= 1e7 ? Math.round(Number(r.fee)) : '', due = Number(r.due) > 0 ? Math.round(Number(r.due)) : 0;
+  return { name: t.name || '', phone: t.phone || '', start: start || today, months, fee, due, gender: t.gender || '', age: t.age || '', batch: t.batch || '', notes: G.str(r.notes, 200) };
 }
 // A trainer and a diet plan belong to the period bought. A renewal keeps the last choice unless told otherwise.
 const extras = (b, last = {}) => ({ pt: b.pt === undefined ? !!last.pt : b.pt === true, diet: b.diet === undefined ? !!last.diet : b.diet === true });
@@ -423,6 +439,45 @@ const gymRoutes = {
     return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), quick });
   },
 
+  // Old records, step one: the AI reads a photo, a PDF or a spreadsheet into rows. Nothing is saved, and the file is not kept.
+  'POST /api/import/read': async ({ body, account, gymId }) => {
+    if (!ai.aiEnabled()) fail(400, 'Reading a file needs the AI, and no AI key is set. Add members by typing or by voice.');
+    if (bucket(`import ${gymId}`, 10 * 60e3).n++ >= 20) fail(429, 'That is a lot of files at once. Wait ten minutes and go on.');
+    const today = G.todayISO();
+    let rows;
+    try { rows = await ai.readRecords({ file: { name: body.name, type: G.str(body.type, 100), data: body.data }, today }); } catch (e) {
+      if (!e.readable) console.error('Reading old records failed:', e.status || '', e.message);
+      fail(e.readable ? 400 : 502, e.readable ? e.message : 'The AI could not read this file just now. Try again, or try a clearer photo.');
+    }
+    return { rows: rows.slice(0, 600).map((r) => oldRow(r, account.details, today)) };
+  },
+  // Step two: the rows the owner looked through become members. Each has the period it was written with, taken as paid
+  // except for what is marked pending. A row that cannot be a member is skipped and named, and the rest still go in.
+  'POST /api/import/save': write(async ({ body, account, gymId }) => {
+    const today = G.todayISO(), gym = account.details, taken = new Set((await db.find('customers', { gymId })).filter(live).map((c) => c.phone));
+    const people = [], periods = [], paid = [], skipped = [];
+    for (const [i, r] of (Array.isArray(body.rows) ? body.rows : []).slice(0, 600).entries()) {
+      try {
+        const who = person(r, gym), id = newId(), membershipId = newId();
+        if (taken.has(who.phone)) fail(409, 'this mobile number is already a member');
+        const start = r.start ? dateOf(r.start, 'The start date') : today;
+        const plan = period({ months: r.months, start, fee: r.fee, paid: 0 }, gym, today, extras({}));
+        const got = plan.fee - Math.min(plan.fee, amount(r.due || 0, 'The pending amount'));
+        taken.add(who.phone);
+        people.push({ _id: id, gymId, ...who, joinedAt: start, imported: today });
+        periods.push({ _id: membershipId, gymId, customerId: id, months: plan.months, start: plan.start, end: plan.end, fee: plan.fee, pt: false, diet: false, createdAt: stamp() });
+        if (got > 0) paid.push({ _id: newId(), gymId, customerId: id, membershipId, name: who.name, amount: got, mode: 'Cash', date: start, createdAt: stamp() });
+      } catch (e) {
+        if (!e.httpStatus) throw e;
+        skipped.push({ row: i + 1, name: G.str(r && r.name, 80), why: e.message });
+      }
+    }
+    await db.insert('memberships', periods);
+    await db.insert('customers', people);
+    await db.insert('transactions', paid);
+    return { added: people.length, skipped };
+  }),
+
   // Sample members, for looking around an empty gym.
   'POST /api/seed': write(async ({ account, gymId }) => {
     if ((await db.find('customers', { gymId })).some(live)) fail(400, 'Sample data is only for an empty gym.');
@@ -518,9 +573,9 @@ async function api(req, res, url) {
   if (!route) fail(404, 'Not found.');
   // Browsers cannot send this content type across sites without a preflight: with the SameSite cookie, that is the CSRF defence.
   if (req.method !== 'GET' && !/^application\/json\b/i.test(req.headers['content-type'] || '')) fail(415, 'Send the request as application/json.');
-  const c = { req, res, id, body: req.method === 'GET' ? {} : await readJsonBody(req) };
+  const c = { req, res, id };
   if (!open[key]) {
-    const who = (await sessionOf(cookieOf(req))) || fail(401, 'Please sign in.');
+    const who = (await sessionOf(cookieOf(req))) || fail(401, 'Please sign in.'); // before the body is read: a stranger cannot make the server hold a large one
     c.admin = !!who.admin;
     if (adminRoutes[key] && !c.admin) fail(403, 'Only the owner of this GymSaathi service can do that.');
     // The owner of the service opens any gym by naming it (?gym=<id>) and then sees and does what that gym can.
@@ -529,6 +584,7 @@ async function api(req, res, url) {
     if (gymRoutes[key] && !c.account) fail(400, 'Open a gym from the Accounts page first.');
     c.gymId = c.account && c.account._id;
   }
+  c.body = req.method === 'GET' ? {} : await readJsonBody(req, key === 'POST /api/import/read' ? MAX_FILE : MAX_BODY);
   const out = await route(c);
   if (!res.headersSent) json(res, 200, out || { ok: true });
 }

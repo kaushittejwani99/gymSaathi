@@ -253,3 +253,5 @@ dialog::backdrop { background: rgba(17, 24, 39, .45); }
 .form-part { margin: 18px 0 8px; font-size: 14px; }
 .form-part:first-child { margin-top: 0; }
 td .actions { flex-wrap: wrap; justify-content: flex-end; min-width: 300px; }
+.import-row input { min-width: 90px; }
+.import-row td:first-child input { min-width: 150px; }

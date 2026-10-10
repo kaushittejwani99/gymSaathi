@@ -13,6 +13,10 @@ It costs nothing to run: free hosting, a free database and a free AI key are eno
 - **Welcome message** on joining, with the plan, dates and fee.
 - **Ask anything.** "Kiski fees baaki hai?", "Is mahine kitna paisa aaya?", "Rahul ki membership kab khatam hogi?" The assistant answers from the gym's own members and reads the answer aloud.
 - **Payments.** One tap for "got the full amount in cash" or by UPI, or enter a part payment. Renew a membership in one tap. The Payments page lists every payment the gym received, for one month or for all time, and Members has tabs for fees pending and fees paid.
+- **Old members come in from a file.** Members, then Import old members: choose a photo of the register, a PDF, an Excel file (.xlsx) or a CSV. The AI reads it into rows (name, mobile, start date, months, fee, pending). You look through every row, mend or remove what is wrong, and save. Handwriting can be misread, so the check is not optional. This needs the AI key.
+- **Excel downloads.** Members and Payments each have a Download Excel button (a .csv file that Excel opens).
+- **Deleted is not gone.** A deleted member waits under Members, Deleted for 30 days and can be brought back with every membership and payment. A deleted gym waits the same way on the Accounts page.
+- **Daily backup.** Once a day every gym's data is kept, for the last 7 days. On the Accounts page, Backups puts a gym back to one of those days; what it held just before is kept too, so a restore can be taken back. Download backup saves everything in one file.
 - **Mistakes can be corrected.** Change a payment's amount, mode or date, and correct the running membership's months, start date, trainer, diet or fee.
 - **Mistakes can be taken back.** Delete a payment typed in by mistake, undo a renewal made by mistake, delete a member, remove the sample members in one step. The owner of the service can delete a whole gym with everything it holds.
 - **Membership history.** Every period a member buys is saved as its own record and never changed: 1 month now and 3 months later are two records. Every payment is its own record too.
@@ -50,6 +54,16 @@ node test.js mongo
 
 runs the same checks on the MongoDB named in `.env`, in a separate database (`gymsaathi_test`) that is deleted at the end. Run it once after you set `MONGODB_URI`, to know the database works.
 
+## If the database is lost
+
+The daily backups live in the same database as the data, so they do not help if the database itself is lost. For that, press **Download backup** on the Accounts page now and then and keep the file somewhere else. To put such a file back:
+
+```bash
+node restore.js gymsaathi-backup-2026-10-10.json.gz --yes
+```
+
+This replaces everything in the database that `.env` names and signs everyone out.
+
 ## Where the data is kept
 
 With `MONGODB_URI` set, in a MongoDB database called `gymsaathi`:
@@ -61,8 +75,9 @@ With `MONGODB_URI` set, in a MongoDB database called `gymsaathi`:
 | `memberships` | period a member bought. Only ever added, never changed |
 | `transactions` | payment received from a member. Only ever added |
 | `sessions` | signed-in device |
+| `backups` | gym per day: everything it held, compressed |
 
-Without `MONGODB_URI` the same five are JSON files in `DATA_DIR`.
+Without `MONGODB_URI` the same six are JSON files in `DATA_DIR`.
 
 ## Put it online for free
 
@@ -136,7 +151,9 @@ Good to know:
 | `server.js` | logins, the API, and serving the pages |
 | `lib/core.js` | dates, fees, membership status, reminder rules and message text (shared with the browser) |
 | `lib/ai.js` | the registration talk and the question answers |
-| `lib/db.js` | storage: the five collections, as files or in MongoDB |
+| `lib/db.js` | storage: the six collections, as files or in MongoDB |
+| `lib/xlsx.js` | reading an Excel file's first sheet |
+| `restore.js` | putting a downloaded backup back |
 | `lib/whatsapp.js` | sending a template message through Meta's WhatsApp Cloud API |
 | `public/` | the pages |
 | `test.js` | the checks |

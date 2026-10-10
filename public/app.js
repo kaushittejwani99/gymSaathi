@@ -11,6 +11,7 @@ let accounts = null;  // the owner's list of gyms
 let view = '';        // the gym the owner of the service has opened; every call then carries ?gym=<id>
 let notice = '';      // why the gym was signed out: its free trial or its plan is over
 let F = { tab: '', q: '', month: '' };
+let imp = { rows: null, done: null }; // old records read from a file and not yet saved, and what the last save did
 const views = {};     // route name -> (id, query) => html
 const actions = {};   // data-action name -> (el, event) => void | Promise
 
@@ -89,6 +90,7 @@ function setData(data) {
   if (!S || !data || S.user.id !== data.user.id) {
     F = { tab: '', q: '', month: '' };
     accounts = null;
+    imp = { rows: null, done: null };
     talk = [];
     reg = null;
     stopVoice();
@@ -123,13 +125,13 @@ function route() {
   }
   for (const a of document.querySelectorAll('.sidebar nav a')) {
     a.hidden = a.id === 'navAccounts' ? !S.user.admin : !S.gym;
-    if (a.hash === `#/${name}`) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    if (a.hash === `#/${name === 'import' ? 'members' : name}`) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
   $('#gymName').textContent = S.gym ? S.gym.name : 'All gyms';
   $('#planNote').textContent = S.gym && S.validTill ? `${S.paying ? 'Plan' : 'Free trial'} till ${G.fmtDate(G.todayISO(new Date(S.validTill)))}` : '';
   $('#viewClose').hidden = !view;
   $('#signOut').hidden = !S.user.admin; // a gym stays signed in until its time is over
-  document.title = `${name === 'bolo' ? 'Assistant' : cap(name)} - GymSaathi`;
+  document.title = `${{ bolo: 'Assistant', import: 'Import old members' }[name] || cap(name)} - GymSaathi`;
   if (name === 'bolo') renderTalk();
   return undefined;
 }
@@ -300,7 +302,7 @@ const memberBody = (form) => ({ ...fd(form), ...(form.pt && { pt: form.pt.checke
 views.members = (id) => {
   if (!id) {
     const tabs = S.deleted.length || F.tab === 'deleted' ? [...TABS, ['deleted', `Deleted (${S.deleted.length})`]] : TABS;
-    return page('Members', `<button class="btn secondary" data-action="export-members">Download Excel</button><button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
+    return page('Members', `<a class="btn secondary" href="#/import">Import old members</a><button class="btn secondary" data-action="export-members">Download Excel</button><button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
       <div class="card"><div class="tabs">${tabs.map(([v, label]) => `<button class="tab" data-action="tab" data-value="${v}" ${F.tab === v ? 'aria-pressed="true"' : ''}>${label}</button>`).join('')}</div>
         <div class="filters"><input type="search" data-action="search" value="${esc(F.q)}" placeholder="Search name or mobile number" aria-label="Search members"></div>
         <div id="list">${memberRows()}</div></div>`);
@@ -434,6 +436,73 @@ Object.assign(actions, {
     dlg.close();
     toast('Membership renewed');
     await load();
+  },
+});
+
+// ---- old records: a photo of the register, a PDF, an Excel or CSV file, read by the AI and checked by the owner
+
+// The file as the server wants it. A photo is made smaller first: a phone's picture is far larger than reading needs.
+async function fileData(file) {
+  if (file.type.startsWith('image/')) {
+    const img = await createImageBitmap(file).catch(() => { throw new Error('This photo could not be opened. Take it as a JPG or PNG.'); });
+    const k = Math.min(1, 2400 / Math.max(img.width, img.height)), c = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return { name: file.name, type: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.85).split(',')[1] };
+  }
+  if (file.size > 8e6) throw new Error('This file is larger than 8 MB. Use a smaller one, or photos of its pages.');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return { name: file.name, type: file.type, data: btoa(text) };
+}
+// Why a row would be refused, so the owner mends or removes it before saving.
+function rowNote(r, seen) {
+  if (!r.name) return 'No name';
+  if (!/^[6-9]\d{9}$/.test(r.phone)) return 'No mobile number';
+  if (S.members.some((m) => m.phone === r.phone)) return 'Already a member';
+  return seen.filter((p) => p === r.phone).length > 1 ? 'Number is here twice' : '';
+}
+function importRows() {
+  const rows = imp.rows, seen = rows.map((r) => r.phone), box = (r, name, attrs) => `<input name="${name}" value="${esc(r[name])}" ${attrs} aria-label="${name}">`;
+  return `<section class="card"><div class="card-head"><h2>2. Check every row (${rows.length})</h2><span class="hint">Mend what was misread, remove what is not a member. Fee empty means the gym's price. Pending is what the member still owes.</span></div>
+    ${table(['Name', 'Mobile', 'Started on', 'Months', 'Fee', 'Pending', ''], rows.map((r) => { const note = rowNote(r, seen); return `<tr class="import-row">
+      <td>${box(r, 'name', 'maxlength="80"')}</td><td>${box(r, 'phone', 'maxlength="15" inputmode="numeric"')}</td><td><input type="date" name="start" value="${esc(r.start)}" aria-label="start"></td>
+      <td>${box(r, 'months', `${NUM} min="1" max="36"`)}</td><td>${box(r, 'fee', NUM)}</td><td>${box(r, 'due', NUM)}</td>
+      <td class="num">${note ? `<span class="low">${note}</span> ` : ''}<button type="button" class="btn ghost icon" data-action="import-drop" aria-label="Remove this row">${icon('x')}</button>
+        <input type="hidden" name="gender" value="${esc(r.gender)}"><input type="hidden" name="age" value="${esc(r.age)}"><input type="hidden" name="batch" value="${esc(r.batch)}"><input type="hidden" name="notes" value="${esc(r.notes)}"></td></tr>`; }))}
+    <div class="card-body actions"><button class="btn primary" data-action="import-save">Save these members</button><button class="btn secondary" data-action="import-clear">Throw these rows away</button></div></section>`;
+}
+views.import = () => page('Import old members', '<a class="btn secondary" href="#/members">Back to members</a>', `
+  <section class="card"><div class="card-head"><h2>1. Choose a file</h2><span class="hint">A photo of the register, a PDF, an Excel file (.xlsx) or a CSV file. One file, or one page, at a time.</span></div>
+    <div class="card-body"><form class="row" data-action="import-read"><input type="file" name="file" required accept="image/*,.pdf,.xlsx,.xls,.csv,.txt" aria-label="File of old members"><button class="btn primary">Read the file</button></form>
+      <p class="hint">For a photo: lay the page flat, in good light, with the whole page in the picture. The AI reads it and can misread handwriting, so look through every row before you save.
+        ${S.aiEnabled ? '' : '<strong class="low">No AI key is set, so a file cannot be read.</strong>'}</p></div></section>
+  ${imp.done ? `<section class="card"><div class="card-body"><strong>${imp.done.added} members added.</strong>${imp.done.skipped.length ? ` ${imp.done.skipped.length} could not be added and are still below:
+      <ul>${imp.done.skipped.map((k) => `<li>${esc(k.name || `Row ${k.row}`)}: ${esc(k.why)}</li>`).join('')}</ul>` : ' <a href="#/members">See the members</a>.'}</div></section>` : ''}
+  ${imp.rows && imp.rows.length ? importRows() : ''}`);
+// The rows as they stand on the screen, with whatever the owner mended.
+const typedRows = () => [...document.querySelectorAll('.import-row')].map((tr) => Object.fromEntries([...tr.querySelectorAll('input')].map((i) => [i.name, i.value.trim()])));
+
+Object.assign(actions, {
+  async 'import-read'(form) {
+    const file = form.file.files[0], button = form.querySelector('button');
+    if (imp.rows) imp.rows = typedRows(); // what the owner mended so far stays, and the next file's rows go below it
+    button.textContent = 'Reading… this can take a minute';
+    try {
+      const r = await api('POST', '/api/import/read', await fileData(file));
+      imp = { rows: [...(imp.rows || []), ...r.rows], done: null };
+      toast(r.rows.length ? `${r.rows.length} rows read. Check them.` : 'No member was found in this file.', !r.rows.length);
+    } finally { route(); }
+  },
+  'import-drop'(el) { el.closest('tr').remove(); },
+  'import-clear'() { imp = { rows: null, done: null }; route(); },
+  async 'import-save'() {
+    const rows = typedRows();
+    if (!rows.length) return toast('There is no row to save.', true);
+    const done = await api('POST', '/api/import/save', { rows });
+    imp = { rows: done.skipped.map((k) => rows[k.row - 1]), done };
+    await refresh();
+    return route();
   },
 });
 

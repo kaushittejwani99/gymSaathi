@@ -228,6 +228,77 @@ async function apiChecks() {
     assert.deepEqual([await status(browser()('POST', '/api/auth/login', { email: ' ox  FIT ', password: 'first-password' })), await status(browser()('POST', '/api/auth/login', { email: 'Ox Fit', password: 'wrong-password' })),
       await status(browser()('POST', '/api/auth/login', { email: 'Fit Zone', password: 'first-password' }))], [200, 401, 401]);
 
+    // A gym's old records come in from a file. An Excel file is a zip of XML: its first sheet is read into rows of cells
+    const zip = (files) => {
+      const parts = [], dir = [];
+      let at = 0;
+      for (const [name, text] of Object.entries(files)) {
+        const raw = Buffer.from(text), packedData = zlib.deflateRawSync(raw), n = Buffer.from(name), local = Buffer.alloc(30), central = Buffer.alloc(46);
+        local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(8, 8); local.writeUInt32LE(packedData.length, 18); local.writeUInt32LE(raw.length, 22); local.writeUInt16LE(n.length, 26);
+        central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(8, 10); central.writeUInt32LE(packedData.length, 20); central.writeUInt32LE(raw.length, 24); central.writeUInt16LE(n.length, 28); central.writeUInt32LE(at, 42);
+        parts.push(local, n, packedData); dir.push(central, n); at += 30 + n.length + packedData.length;
+      }
+      const end = Buffer.alloc(22), cd = Buffer.concat(dir), count = Object.keys(files).length;
+      end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(at, 16);
+      return Buffer.concat([...parts, cd, end]);
+    };
+    const book = zip({ 'xl/sharedStrings.xml': '<sst><si><t>Name</t></si><si><r><t>Mo</t></r><r><t>bile</t></r></si><si><t>Start</t></si></sst>',
+      'xl/worksheets/sheet1.xml': '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Ravi &amp; Sons</t></is></c><c r="C2"><v>46000</v></c></row><row r="3"/></sheetData></worksheet>' });
+    assert.deepEqual(require('./lib/xlsx').rows(book), [['Name', 'Mobile', 'Start'], ['Ravi & Sons', '', '46000']]);
+    assert.throws(() => require('./lib/xlsx').rows(Buffer.from('not a spreadsheet')));
+    // The AI turns a photo, a PDF or the lines of a spreadsheet into rows; the owner sees them before any is saved. Google is stubbed
+    assert.equal(await status(gym('POST', '/api/import/read', { name: 'old.csv', type: 'text/csv', data: Buffer.from('a,b\n1,2').toString('base64') })), 400); // no AI key set
+    const askedOf = [], realAsk = global.fetch;
+    let answer = { rows: [{ name: 'Sita Devi', phone: '98290 33333', start: '2026-01-15', end: '2026-07-14', fee: 5000, due: 500, gender: 'Female', age: 31 },
+      { name: 'No Number', start: '2026-03-01', months: 3 }, { name: 'Gita', phone: '9829033334', months: 99, start: '2031-01-01', fee: 'free' }, 'rubbish'] };
+    global.fetch = (url, init) => {
+      if (!String(url).startsWith('https://generativelanguage.googleapis.com/')) return realAsk(url, init);
+      askedOf.push(JSON.parse(init.body).input);
+      return Promise.resolve(Response.json({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: typeof answer === 'string' ? answer : `Here you are: ${JSON.stringify(answer)}` }] }] }));
+    };
+    process.env.GEMINI_API_KEY = 'test-key';
+    try {
+      const b64 = (text) => Buffer.from(text).toString('base64'), read = (file) => gym('POST', '/api/import/read', file);
+      // A CSV goes as lines of text under its headings. What comes back is made fit: the length worked out from the
+      // first and last day, a date in the future or a silly value dropped, a number that is no mobile number left empty
+      const csv = await ok(read({ name: 'old.csv', type: 'application/vnd.ms-excel', data: b64('﻿Name,Mobile,"Joined, on"\r\n"Devi, Sita",98290 33333,15/01/2026\r\n') }));
+      assert.equal(askedOf[0], 'Name | Mobile | Joined, on\nDevi, Sita | 98290 33333 | 15/01/2026');
+      assert.deepEqual(csv.rows, [{ name: 'Sita Devi', phone: '9829033333', start: '2026-01-15', months: 6, fee: 5000, due: 500, gender: 'Female', age: 31, batch: '', notes: '' },
+        { name: 'No Number', phone: '', start: '2026-03-01', months: 3, fee: '', due: 0, gender: '', age: '', batch: '', notes: '' },
+        { name: 'Gita', phone: '9829033334', start: today, months: 1, fee: '', due: 0, gender: '', age: '', batch: '', notes: '' }]);
+      // An Excel file goes the same way; a photo and a PDF go as they are, beside the request
+      await ok(read({ name: 'Old Members.XLSX', type: '', data: book.toString('base64') }));
+      await ok(read({ name: 'page1.jpg', type: 'image/jpeg', data: b64('picture') }));
+      await ok(read({ name: 'list.pdf', type: 'application/pdf', data: b64('%PDF') }));
+      assert.deepEqual([askedOf[1], askedOf[2][1], askedOf[3][1]], ['Name | Mobile | Start\nRavi & Sons |  | 46000', { type: 'image', data: b64('picture'), mime_type: 'image/jpeg' }, { type: 'document', data: b64('%PDF'), mime_type: 'application/pdf' }]);
+      // A long sheet goes sixty lines at a time, each time under its headings
+      await ok(read({ name: 'long.csv', type: 'text/csv', data: b64(['Name,Mobile', ...Array.from({ length: 130 }, (x, i) => `M${i},98290${String(40000 + i)}`)].join('\n')) }));
+      assert.deepEqual([askedOf.length, askedOf[4].split('\n').length, askedOf[6].split('\n').length, askedOf[6].split('\n')[0]], [7, 61, 11, 'Name | Mobile']);
+      // What cannot be read says so in words for the owner; an answer from the AI that is no rows is an AI failure
+      assert.deepEqual([(await read({ name: 'old.xls', type: '', data: b64('x') }))[1].error.includes('.xlsx'), await status(read({ name: 'a.xlsx', type: '', data: b64('broken') })), await status(read({ name: 'a.zip', type: '', data: b64('x') })),
+        await status(read({ name: 'a.csv', type: '', data: '' })), await status(nobody('POST', '/api/import/read', {}))], [true, 400, 400, 400, 401]);
+      answer = 'I could not read it, sorry.';
+      assert.equal(await status(read({ name: 'page.png', type: 'image/png', data: b64('x') })), 502);
+    } finally {
+      process.env.GEMINI_API_KEY = '';
+      global.fetch = realAsk;
+    }
+    // Saving: each row becomes a member with the period it was written with, taken as paid but for what is pending,
+    // and its payment dated on the day it started. A row that cannot be a member is skipped and named; the rest go in
+    const saved = await ok(gym('POST', '/api/import/save', { rows: [{ name: 'Sita Devi', phone: '9829033333', start: '2026-01-15', months: 6, fee: 5000, due: 500, gender: 'Female', age: 31, notes: 'old register' },
+      { name: 'No Number', phone: '', start: '2026-03-01', months: 3 }, { name: 'Rahul Again', phone: rahul.phone, months: 1 }, { name: 'Sita Twin', phone: '9829033333', months: 1 },
+      { name: 'Plain One', phone: '9829033335', months: '2', fee: '', due: '', start: '' }] }));
+    assert.deepEqual([saved.added, saved.skipped.map((k) => [k.row, k.name, k.why])], [2, [[2, 'No Number', 'The mobile number must have 10 digits.'], [3, 'Rahul Again', 'this mobile number is already a member'], [4, 'Sita Twin', 'this mobile number is already a member']]]);
+    data = await ok(gym('GET', '/api/data'));
+    const sita = data.members.find((m) => m.name === 'Sita Devi'), plainOne = data.members.find((m) => m.name === 'Plain One');
+    assert.deepEqual([sita.joinedAt, sita.start, sita.end, sita.months, sita.fee, sita.paid, sita.gender, sita.age, sita.notes, G.statusOf(sita, today), data.payments.filter((p) => p.memberId === sita.id).map((p) => [p.amount, p.date])],
+      ['2026-01-15', '2026-01-15', '2026-07-14', 6, 5000, 4500, 'Female', 31, 'old register', 'expired', [[4500, '2026-01-15']]]);
+    assert.deepEqual([plainOne.start, plainOne.months, plainOne.fee, plainOne.paid], [today, 2, 2000, 2000]);
+    for (const m of [sita, plainOne]) { // out of the way of what follows
+      await db.remove('customers', { _id: m.id });
+      for (const name of ['memberships', 'transactions']) await db.remove(name, { customerId: m.id });
+    }
+
     // Mistakes can be corrected. A payment: its amount (never to more than was owed), how it was paid and its date
     const first = (await ok(gym('GET', '/api/data'))).payments.find((p) => p.memberId === rahul.id && p.amount === 5000);
     assert.deepEqual([await status(gym('PUT', `/api/payments/${first.id}`, { amount: 8701 })), await status(gym('PUT', `/api/payments/${first.id}`, { amount: 0 })), await status(gym('PUT', '/api/payments/0123456789abcdef', { amount: 1 }))], [400, 400, 404]);
