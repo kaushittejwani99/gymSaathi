@@ -64,7 +64,7 @@ async function apiChecks() {
   if (!MONGO) process.env.MONGODB_URI = '';
   const srv = await require('./server').start(0), db = require('./lib/db');
   assert.equal(db.usingMongo, MONGO, MONGO ? 'Put MONGODB_URI in .env first.' : '');
-  if (MONGO) await (await db.ready).dropDatabase(); // what an earlier run that broke off left behind
+  if (MONGO) { await (await db.ready).dropDatabase(); await db.indexes(); } // what an earlier run that broke off left behind
   const today = G.todayISO();
   const browser = () => {
     let cookie = '';

@@ -502,15 +502,19 @@ const gymRoutes = {
 // The service owner's Accounts page: every gym, its login, its time left and its numbers.
 const adminRoutes = {
   'GET /api/admin/gyms': async () => {
-    // ponytail: reads every member and payment of every gym to add them up; count in the database when that gets slow.
-    const [gyms, everyone, everyPeriod, everyPaid] = await Promise.all(['gyms', 'customers', 'memberships', 'transactions'].map((name) => db.find(name)));
-    const customers = everyone.filter(live), here = new Set(customers.map((c) => c._id));
-    const periods = everyPeriod.filter((p) => here.has(p.customerId)), paid = everyPaid.filter((t) => here.has(t.customerId));
-    const of = (list, g) => list.filter((x) => x.gymId === g._id);
+    // The members come as bare ids and the money is added up inside the database, one total for each member, so this
+    // page does not pull every period and payment of every gym across. A deleted member counts for nothing.
+    // ponytail: still one row for each member of every gym; keep running totals on the gym when that gets slow.
+    const [gyms, people, fees, paid] = await Promise.all([db.find('gyms'), db.find('customers', {}, ['gymId', 'deletedAt']), db.sums('memberships', 'customerId', 'fee'), db.sums('transactions', 'customerId', 'amount')]);
+    const totals = new Map();
+    for (const c of people.filter(live)) {
+      const t = totals.get(c.gymId) || { members: 0, fee: 0, got: 0 };
+      totals.set(c.gymId, { members: t.members + 1, fee: t.fee + (fees.get(c._id) || 0), got: t.got + (paid.get(c._id) || 0) });
+    }
     return gyms.map((g) => {
-      const got = sum(of(paid, g), 'amount');
+      const t = totals.get(g._id) || { members: 0, fee: 0, got: 0 };
       return { id: g._id, email: g.email, gym: g.details.name, owner: g.details.owner, phone: g.details.phone, createdAt: g.createdAt, disabled: g.disabled, firstLoginAt: g.firstLoginAt,
-        lastLoginAt: g.lastLoginAt, validTill: g.validTill, deletedAt: g.deletedAt || null, paidMonths: sum(g.renewals, 'months'), members: of(customers, g).length, collected: got, due: sum(of(periods, g), 'fee') - got };
+        lastLoginAt: g.lastLoginAt, validTill: g.validTill, deletedAt: g.deletedAt || null, paidMonths: sum(g.renewals, 'months'), members: t.members, collected: t.got, due: t.fee - t.got };
     });
   },
   'POST /api/admin/gyms': async ({ body }) => {
