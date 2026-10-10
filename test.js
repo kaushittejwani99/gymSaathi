@@ -404,6 +404,23 @@ async function apiChecks() {
       fs.rmSync(into, { recursive: true, force: true });
     }
 
+    // Several members ticked on the list go together, each as one deleted member does; ids of another gym, of nobody,
+    // or twice over are passed by. Several gyms go together the same way, for the owner of the service only
+    const many = [];
+    for (const n of [1, 2, 3]) many.push((await ok(gym('POST', '/api/members', { name: `Batch ${n}`, phone: `982904400${n}`, months: 1 }))).id);
+    assert.deepEqual([await status(gym('POST', '/api/members/delete', { ids: [] })), await status(gym('POST', '/api/members/delete', { ids: 'all' })), await status(nobody('POST', '/api/members/delete', { ids: many }))], [400, 400, 401]);
+    const outside = (await ok(owner('POST', '/api/admin/gyms', { ...fitZone, name: 'Batch Gym A', email: 'batch.a', password: 'first-password' }))).id;
+    const outsider = (await ok(owner('POST', `/api/members?gym=${outside}`, { name: 'Not Yours', phone: '9829044009', months: 1 }))).id;
+    assert.equal((await ok(gym('POST', '/api/members/delete', { ids: [many[0], many[1], many[1], outsider, '0123456789abcdef', 'x'] }))).deleted, 2);
+    data = await ok(gym('GET', '/api/data'));
+    assert.deepEqual([data.members.filter((m) => m.name.startsWith('Batch')).map((m) => m.name), data.deleted.map((d) => d.name).sort(), (await ok(owner('GET', `/api/data?gym=${outside}`))).members.length], [['Batch 3'], ['Batch 1', 'Batch 2'], 1]);
+    for (const m of many) { await db.remove('customers', { _id: m }); for (const name of ['memberships', 'transactions']) await db.remove(name, { customerId: m }); } // out of the way of what follows
+    await ok(gym('POST', '/api/members/delete', { ids: ['0123456789abcdef'] })); // a change through the app, so the cached list is read afresh
+    const second2 = (await ok(owner('POST', '/api/admin/gyms', { ...fitZone, name: 'Batch Gym B', email: 'batch.b', password: 'first-password' }))).id;
+    assert.deepEqual([await status(gym('POST', '/api/admin/gyms/delete', { ids: [outside] })), (await ok(owner('POST', '/api/admin/gyms/delete', { ids: [outside, second2, '0123456789abcdef'] }))).deleted,
+      !!(await listed('batch.a')).deletedAt, !!(await listed('batch.b')).deletedAt, await status(browser()('POST', '/api/auth/login', { email: 'batch.a', password: 'first-password' })), (await listed('fit.zone')).deletedAt], [403, 2, true, true, 401, null]);
+    for (const g of [outside, second2]) { for (const name of ['customers', 'memberships', 'transactions', 'sessions']) await db.remove(name, { gymId: g }); await db.remove('gyms', { _id: g }); }
+
     // Passwords: the gym changes its own; the owner resets one and switches a gym off
     assert.equal(await status(gym('POST', '/api/auth/password', { current: 'wrong-one', password: 'second-password' })), 400);
     await ok(gym('POST', '/api/auth/password', { current: 'first-password', password: 'second-password' }));

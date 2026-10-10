@@ -11,6 +11,7 @@ let accounts = null;  // the owner's list of gyms
 let view = '';        // the gym the owner of the service has opened; every call then carries ?gym=<id>
 let notice = '';      // why the gym was signed out: its free trial or its plan is over
 let F = { tab: '', q: '', month: '' };
+const picked = new Set(); // what is ticked on the list in view, to delete together
 let imp = { rows: null, done: null }; // old records read from a file and not yet saved, and what the last save did
 const views = {};     // route name -> (id, query) => html
 const actions = {};   // data-action name -> (el, event) => void | Promise
@@ -62,6 +63,21 @@ function saveTable(name, rows) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 const yes = (v) => (v ? 'Yes' : 'No');
+
+// Ticking rows of a list. The bar above the list says how many are ticked and deletes them together.
+const PICK_ALL = '<input type="checkbox" data-action="pick-all" aria-label="Tick all">';
+const pickBox = (id, name) => `<td class="pick"><input type="checkbox" data-action="pick" value="${esc(id)}" ${picked.has(id) ? 'checked' : ''} aria-label="Tick ${esc(name)}"></td>`;
+const bulkBar = () => `<div class="bulk" id="bulk" ${picked.size ? '' : 'hidden'}><strong id="bulkCount">${picked.size} ticked</strong>
+  <button class="btn danger" data-action="bulk-delete">${icon('trash')}Delete ticked</button><button class="btn ghost" data-action="pick-none">Untick all</button></div>`;
+function showPicked() {
+  const bar = $('#bulk');
+  if (!bar) return;
+  bar.hidden = !picked.size;
+  $('#bulkCount').textContent = `${picked.size} ticked`;
+  const boxes = [...document.querySelectorAll('[data-action="pick"]')], all = $('[data-action="pick-all"]');
+  for (const box of boxes) box.checked = picked.has(box.value);
+  if (all) all.checked = boxes.length > 0 && boxes.every((box) => box.checked);
+}
 
 const STATUS = { active: ['paid', 'Active'], expiring: ['partial', 'Ending soon'], expired: ['overdue', 'Ended'] };
 const pill = (m) => { const [cls, label] = STATUS[G.statusOf(m, today())]; return `<span class="pill ${cls}">${label}</span>`; };
@@ -116,6 +132,7 @@ function route() {
   // The owner of the service has the Accounts page, and a gym's own pages once one is opened from there.
   if (!Object.hasOwn(views, name) || (!S.gym && name !== 'accounts')) return location.replace(S.gym ? '#/dashboard' : '#/accounts');
   current = name;
+  picked.clear();
   main.innerHTML = views[name](id, new URLSearchParams(query)) || notFound;
   // In its last five days a gym is told on its dashboard that its time is ending, and what to pay.
   const left = S.validTill ? Math.ceil((Date.parse(S.validTill) - Date.now()) / 864e5) : 99;
@@ -269,8 +286,8 @@ function memberRows() {
   const rows = S.members.filter((m) => (!F.tab || (F.tab === 'due' ? G.due(m) > 0 : F.tab === 'paid' ? !G.due(m) : G.statusOf(m, t) === F.tab)) && (!q || `${m.name} ${m.phone}`.toLowerCase().includes(q)))
     .sort((a, b) => (a.end > b.end) - (a.end < b.end));
   if (!rows.length) return empty('No members here', S.members.length ? 'Change the tab or the search.' : 'Add your first member.');
-  return table(['Member', 'Plan', 'Ends', '#Fee due', 'Status'], rows.map((m) => `<tr data-action="go" data-href="#/members/${esc(m.id)}">
-    <td><a href="#/members/${esc(m.id)}">${esc(m.name)}</a><br><span class="muted">${esc(m.phone)}</span></td>
+  return table([PICK_ALL, 'Member', 'Plan', 'Ends', '#Fee due', 'Status'], rows.map((m) => `<tr data-action="go" data-href="#/members/${esc(m.id)}">
+    ${pickBox(m.id, m.name)}<td><a href="#/members/${esc(m.id)}">${esc(m.name)}</a><br><span class="muted">${esc(m.phone)}</span></td>
     <td>${planName(m.months)}${m.pt ? ' + trainer' : ''}${m.diet ? ' + diet' : ''}</td><td>${esc(G.fmtDate(m.end))}</td>
     <td class="num ${G.due(m) ? 'low' : ''}">${G.due(m) ? money(G.due(m)) : ''}</td><td>${pill(m)}</td></tr>`));
 }
@@ -304,7 +321,7 @@ views.members = (id) => {
     return page('Members', `<a class="btn secondary" href="#/import">Import old members</a><button class="btn secondary" data-action="export-members">Download Excel</button><button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
       <div class="card"><div class="tabs">${tabs.map(([v, label]) => `<button class="tab" data-action="tab" data-value="${v}" ${F.tab === v ? 'aria-pressed="true"' : ''}>${label}</button>`).join('')}</div>
         <div class="filters"><input type="search" data-action="search" value="${esc(F.q)}" placeholder="Search name or mobile number" aria-label="Search members"></div>
-        <div id="list">${memberRows()}</div></div>`);
+        ${bulkBar()}<div id="list">${memberRows()}</div></div>`);
   }
   const m = byId(S.members, id);
   if (!m) return '';
@@ -342,7 +359,21 @@ views.members = (id) => {
 
 Object.assign(actions, {
   tab(el) { F.tab = el.dataset.value; route(); },
-  search(el) { F.q = el.value; $('#list').innerHTML = memberRows(); },
+  search(el) { F.q = el.value; $('#list').innerHTML = memberRows(); showPicked(); },
+  pick(el) { if (el.checked) picked.add(el.value); else picked.delete(el.value); showPicked(); },
+  'pick-all'(el) { for (const box of document.querySelectorAll('[data-action="pick"]')) { if (el.checked) picked.add(box.value); else picked.delete(box.value); } showPicked(); },
+  'pick-none'() { picked.clear(); showPicked(); },
+  'bulk-delete'() {
+    const n = picked.size, gyms = current === 'accounts';
+    sure(`Delete ${n} ${gyms ? 'gym' : 'member'}${n > 1 ? 's' : ''}?`, gyms ? 'Each gym leaves at once with everything it holds and is signed out. For 30 days you can bring them back from Deleted gyms on this page; after that they are gone for good.'
+      : 'They leave every list and total, with their payments. For 30 days you can bring them back from Members, under Deleted; after that they are gone for good.', 'bulk-delete-yes', '', `Delete ${n}`);
+  },
+  async 'bulk-delete-yes'() {
+    const gyms = current === 'accounts', r = await api('POST', gyms ? '/api/admin/gyms/delete' : '/api/members/delete', { ids: [...picked] });
+    dlg.close();
+    toast(`${r.deleted} deleted. They can be brought back for 30 days.`);
+    if (gyms) { picked.clear(); await loadAccounts(); } else await load();
+  },
   async seed() { await api('POST', '/api/seed'); toast('Sample members loaded'); await load(); },
   'member-new'() { openDialog(dialogForm('New member', 'member-save', '', memberForm({}, true), 'Save member')); },
   'member-edit'(el) { openDialog(dialogForm('Edit member', 'member-save', el.dataset.id, memberForm(byId(S.members, el.dataset.id)))); },
@@ -745,8 +776,8 @@ views.accounts = () => {
   return page('Accounts', add, `
     <div class="kpis">${card('Gyms', shown.length, `${shown.filter((g) => g.firstLoginAt && !g.disabled && new Date(g.validTill) > new Date()).length} running now`)}${card('Members in all gyms', all('members').toLocaleString('en-IN'), 'open a gym to see its own')}
       ${card('Fees pending in all gyms', money(all('due')), 'owed to the gyms by their members')}${card('Collected by all gyms', money(all('collected')), 'since each gym began')}</div>
-    <div class="card">${table(['Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], shown.map((a) => `<tr>
-      <td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: <strong>${esc(a.email)}</strong>${a.owner || a.phone ? `<br>${esc([a.owner, a.phone].filter(Boolean).join(' · '))}` : ''}</span></td>
+    <div class="card">${bulkBar()}${table([PICK_ALL, 'Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], shown.map((a) => `<tr>
+      ${pickBox(a.id, a.gym)}<td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: <strong>${esc(a.email)}</strong>${a.owner || a.phone ? `<br>${esc([a.owner, a.phone].filter(Boolean).join(' · '))}` : ''}</span></td>
       <td class="num">${a.members}</td><td class="num ${a.due > 0 ? 'low' : ''}">${money(a.due)}</td><td class="num">${money(a.collected)}</td>
       <td>${esc(when(a.firstLoginAt)) || '<span class="muted">Never</span>'}${a.lastLoginAt && a.lastLoginAt !== a.firstLoginAt ? `<br><span class="muted">last ${esc(when(a.lastLoginAt))}</span>` : ''}</td>
       <td>${planPill(a)}${a.validTill ? `<br><span class="muted">${esc(when(a.validTill))}</span>` : ''}</td>

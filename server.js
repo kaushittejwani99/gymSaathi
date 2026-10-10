@@ -39,6 +39,8 @@ const live = (x) => !x.deletedAt; // a deleted member or gym stays in the store,
 const required = (v, label, max) => G.str(v, max) || fail(400, `${label} is required.`);
 const amount = (v, label, max = 1e7) => { const n = Number(v); return n >= 0 && n <= max ? Math.round(n) : fail(400, `${label} must be a number from 0 to ${max.toLocaleString('en-IN')}.`); };
 const phoneOf = (v) => { const d = G.lastTen(v); return /^[6-9]\d{9}$/.test(d) ? d : fail(400, 'The mobile number must have 10 digits.'); };
+// The ids ticked on a list: each once, well-formed, and not more than a thousand.
+const tickedIds = (v) => { const ids = [...new Set(Array.isArray(v) ? v : [])].filter((id) => typeof id === 'string' && /^[a-f0-9]{16}$/.test(id)).slice(0, 1000); return ids.length ? ids : fail(400, 'Tick at least one.'); };
 const dateOf = (v, label) => (G.isDate(v) && v >= '2000-01-01' && v <= '2099-12-31' ? v : fail(400, `${label} must be a real date.`));
 
 // ---- accounts (one login per gym, made by the owner of this service)
@@ -367,6 +369,13 @@ const gymRoutes = {
     await memberById(gymId, id);
     await dropMember(gymId, id);
   }),
+  // Several members at once. Each leaves as a single deleted member does, and can be brought back for 30 days.
+  'POST /api/members/delete': write(async ({ body, gymId }) => {
+    const ids = tickedIds(body.ids), here = new Set((await db.find('customers', { gymId }, ['deletedAt'])).filter(live).map((c) => c._id));
+    const going = ids.filter((id) => here.has(id));
+    await Promise.all(going.map((id) => dropMember(gymId, id)));
+    return { deleted: going.length };
+  }),
   // A deleted member comes back with every period and payment, unless their mobile number has since gone to another.
   'POST /api/members/:id/restore': write(async ({ gymId, id }) => {
     const [c] = await db.find('customers', { _id: id, gymId });
@@ -528,6 +537,12 @@ const adminRoutes = {
     if (!(await gymById(id))) fail(404, 'Gym not found.');
     await db.update('gyms', { _id: id }, { deletedAt: stamp() });
     await db.remove('sessions', { gymId: id });
+  },
+  // Several gyms at once, each deleted as one is: signed out, hidden, and kept for KEEP_DELETED_DAYS days.
+  'POST /api/admin/gyms/delete': async ({ body }) => {
+    const ids = tickedIds(body.ids), at = stamp(), going = (await db.find('gyms')).filter((g) => live(g) && ids.includes(g._id));
+    await Promise.all(going.map(async (g) => { await db.update('gyms', { _id: g._id }, { deletedAt: at }); await db.remove('sessions', { gymId: g._id }); }));
+    return { deleted: going.length };
   },
   'POST /api/admin/gyms/:id/restore': async ({ id }) => {
     const [g] = await db.find('gyms', { _id: id });
