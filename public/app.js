@@ -740,7 +740,11 @@ views.accounts = () => {
   const add = `<a class="btn secondary" href="/api/admin/backup" download>Download backup</a><button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
   const gone = accounts.filter((a) => a.deletedAt), shown = accounts.filter((a) => !a.deletedAt);
   if (!accounts.length) return page('Accounts', add, `<div class="card">${empty('No gym yet', 'Add a gym and give it its username and password. Its free month starts when it first signs in.', add)}</div>`);
+  // All gyms added up. A gym's own Members page only ever shows that one gym.
+  const all = (key) => shown.reduce((n, g) => n + g[key], 0), card = (label, value, hint) => `<div class="card kpi"><div class="muted">${label}</div><div class="kpi-value">${value}</div><div class="hint">${hint}</div></div>`;
   return page('Accounts', add, `
+    <div class="kpis">${card('Gyms', shown.length, `${shown.filter((g) => g.firstLoginAt && !g.disabled && new Date(g.validTill) > new Date()).length} running now`)}${card('Members in all gyms', all('members').toLocaleString('en-IN'), 'open a gym to see its own')}
+      ${card('Fees pending in all gyms', money(all('due')), 'owed to the gyms by their members')}${card('Collected by all gyms', money(all('collected')), 'since each gym began')}</div>
     <div class="card">${table(['Gym', '#Members', '#Fees pending', '#Collected', 'First sign-in', 'Runs till', ''], shown.map((a) => `<tr>
       <td><strong>${esc(a.gym)}</strong><br><span class="muted">Login: <strong>${esc(a.email)}</strong>${a.owner || a.phone ? `<br>${esc([a.owner, a.phone].filter(Boolean).join(' · '))}` : ''}</span></td>
       <td class="num">${a.members}</td><td class="num ${a.due > 0 ? 'low' : ''}">${money(a.due)}</td><td class="num">${money(a.collected)}</td>
