@@ -183,10 +183,10 @@ const authView = () => `
       <p class="tagline">Run your gym by talking</p></div>
     <div><h1>Sign in</h1><p class="muted">Welcome back.</p></div>
     ${notice ? `<p class="pay-note" role="alert">${esc(notice)}</p>` : ''}
-    ${field('Username', '<input name="email" required maxlength="100" autocomplete="username" autocapitalize="none" spellcheck="false">')}
+    ${field('Username or gym name', '<input name="email" required maxlength="100" autocomplete="username" autocapitalize="none" spellcheck="false">')}
     ${field('Password', '<input name="password" type="password" required autocomplete="current-password">')}
     <button class="btn primary">Sign in</button>
-    <p class="muted">Use the username GymSaathi gave you. It is not your gym's name. No login yet, or forgot it? Ask GymSaathi.</p>
+    <p class="muted">Sign in with the username GymSaathi gave you, or with your gym's name. No login yet, or forgot the password? Ask GymSaathi.</p>
   </form>`;
 
 Object.assign(actions, {
@@ -643,7 +643,7 @@ Object.assign(actions, {
     await loadAccounts();
   },
   'account-password'(el) {
-    openDialog(dialogForm(`Login of ${el.dataset.gym}`, 'account-password-save', el.dataset.id, `<p class="hint">The gym signs in with this username and its password, not with the gym's name.</p><div class="grid">
+    openDialog(dialogForm(`Login of ${el.dataset.gym}`, 'account-password-save', el.dataset.id, `<p class="hint">The gym signs in with this username, or with its gym name when no other gym has the same name, and this password.</p><div class="grid">
       ${field('Username', input('email', el.dataset.name, 'required maxlength="100" autocapitalize="none" spellcheck="false" autocomplete="off"'), 'span2')}
       ${field('New password (leave empty to keep the old one)', '<input name="password" type="password" minlength="8" maxlength="200" autocomplete="new-password">', 'span2')}</div>`, 'Save login'));
   },

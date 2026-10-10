@@ -225,7 +225,14 @@ const open = {
     // Counted per username, and per address across usernames, before any password is worked on.
     const tries = bucket(`login ${clientOf(req)} ${email}`, 15 * 60e3), all = bucket(`login ${clientOf(req)}`, 15 * 60e3);
     if (tries.n >= 10 || all.n >= 50) fail(429, 'Too many wrong attempts. Try again in 15 minutes.');
-    const owner = !!email && email === adminEmail(), [g] = owner ? [] : await db.find('gyms', { email });
+    const owner = !!email && email === adminEmail();
+    let [g] = owner ? [] : await db.find('gyms', { email });
+    // A gym may also type its own name, as long as no other gym has the same one.
+    // ponytail: reads every gym when the username is not found; keep a lowercase name to look up when there are thousands.
+    if (!owner && !g && email) {
+      const named = (await db.find('gyms')).filter((x) => G.str(x.details.name).toLowerCase().replace(/\s+/g, ' ') === email.replace(/\s+/g, ' '));
+      if (named.length === 1) [g] = named;
+    }
     // The same work is done for an unknown name, so the time taken does not say which names exist.
     const { hash } = hashed(password, g ? g.salt : '00');
     if (!(owner ? adminOk(password) : g && same(hash, g.hash))) { tries.n++; all.n++; fail(401, 'Wrong username or password.'); }
