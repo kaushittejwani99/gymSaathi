@@ -10,7 +10,7 @@ let current = '';     // route name on screen
 let accounts = null;  // the owner's list of gyms
 let view = '';        // the gym the owner of the service has opened; every call then carries ?gym=<id>
 let notice = '';      // why the gym was signed out: its free trial or its plan is over
-let F = { tab: '', q: '' };
+let F = { tab: '', q: '', month: '' };
 const views = {};     // route name -> (id, query) => html
 const actions = {};   // data-action name -> (el, event) => void | Promise
 
@@ -71,7 +71,7 @@ async function api(method, path, body) {
 // The one place S changes. Another gym, or none, never sees what the last one said to the assistant.
 function setData(data) {
   if (!S || !data || S.user.id !== data.user.id) {
-    F = { tab: '', q: '' };
+    F = { tab: '', q: '', month: '' };
     accounts = null;
     talk = [];
     reg = null;
@@ -237,10 +237,10 @@ views.dashboard = () => {
 
 // ---- members
 
-const TABS = [['', 'All'], ['active', 'Active'], ['expiring', 'Ending soon'], ['expired', 'Ended'], ['due', 'Fees pending']];
+const TABS = [['', 'All'], ['active', 'Active'], ['expiring', 'Ending soon'], ['expired', 'Ended'], ['due', 'Fees pending'], ['paid', 'Fees paid']];
 function memberRows() {
   const q = F.q.trim().toLowerCase(), t = today();
-  const rows = S.members.filter((m) => (!F.tab || (F.tab === 'due' ? G.due(m) > 0 : G.statusOf(m, t) === F.tab)) && (!q || `${m.name} ${m.phone}`.toLowerCase().includes(q)))
+  const rows = S.members.filter((m) => (!F.tab || (F.tab === 'due' ? G.due(m) > 0 : F.tab === 'paid' ? !G.due(m) : G.statusOf(m, t) === F.tab)) && (!q || `${m.name} ${m.phone}`.toLowerCase().includes(q)))
     .sort((a, b) => (a.end > b.end) - (a.end < b.end));
   if (!rows.length) return empty('No members here', S.members.length ? 'Change the tab or the search.' : 'Add your first member.');
   return table(['Member', 'Plan', 'Ends', '#Fee due', 'Status'], rows.map((m) => `<tr data-action="go" data-href="#/members/${esc(m.id)}">
@@ -370,6 +370,24 @@ Object.assign(actions, {
     await load();
   },
 });
+
+// ---- payments: every rupee the gym received, newest first, for one month or for all time
+
+function paymentRows() {
+  const rows = S.payments.filter((p) => !F.month || p.date.startsWith(F.month)).sort((a, b) => (a.date < b.date) - (a.date > b.date));
+  const total = rows.reduce((s, p) => s + p.amount, 0);
+  if (!rows.length) return empty('No payment here', F.month ? 'Nothing was received in this month. Clear the month to see all.' : 'Payments show up here as members pay.');
+  return `<div class="card-body"><strong>${money(total)}</strong> received in ${rows.length} payment${rows.length > 1 ? 's' : ''}</div>` + table(['Date', 'Member', 'Paid by', '#Amount'], rows.map((p) => `<tr>
+    <td>${esc(G.fmtDate(p.date))}</td><td>${byId(S.members, p.memberId) ? `<a href="#/members/${esc(p.memberId)}">${esc(p.name)}</a>` : esc(p.name)}</td><td>${esc(p.mode)}</td><td class="num">${money(p.amount)}</td></tr>`));
+}
+views.payments = () => {
+  const owe = S.members.filter((m) => G.due(m) > 0), owed = owe.reduce((s, m) => s + G.due(m), 0);
+  return page('Payments', '', `
+    <div class="card"><div class="filters"><label class="field"><span>Month (empty shows all)</span><input type="month" data-action="pay-month" value="${esc(F.month)}"></label></div>
+      <div id="list">${paymentRows()}</div></div>
+    <p class="hint">${owe.length ? `${money(owed)} is still pending from ${owe.length} member${owe.length > 1 ? 's' : ''}: <a href="#/members" data-action="tab" data-value="due">see who</a>.` : 'No fees are pending.'}</p>`);
+};
+actions['pay-month'] = (el) => { F.month = el.value; $('#list').innerHTML = paymentRows(); };
 
 // ---- the assistant: it speaks, listens, and registers a member by asking
 
