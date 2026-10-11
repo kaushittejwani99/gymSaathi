@@ -72,6 +72,10 @@ async function talkChecks() {
   assert.deepEqual([(await fresh('rahul ka hisaab')).length, (await say('verma'))[2]], [4, '- मोबाइल: 9829022222']);                                // the rest of the name settles it
   assert.deepEqual([(await fresh('rahul verma ki membership'))[2], (await fresh('priya ki fees kitni baaki hai'))[2]], ['- मोबाइल: 9829022222', '- मोबाइल: 9829044444']); // a name that fits one member asks nothing
   assert.deepEqual([(await fresh('kiski fees baaki hai'))[0], (await say('is mahine kitna aaya'))[0]], ['2 मेंबर की फीस बाकी है, कुल ₹1,400।', 'इस महीने ₹0 जमा हुए, 0 भुगतान में।']);
+  // An 'ok' or a thank-you after an answer is not one more question about that member; a real follow-up still is
+  assert.deepEqual([await fresh('priya ka hisaab'), await say('Ok.'), await say('theek hai ji'), await say('Thank you!'), await say('bye')].slice(1).map((a) => a.join('|')),
+    ['ठीक है। और कुछ पूछना हो तो बताइए।', 'ठीक है। और कुछ पूछना हो तो बताइए।', 'आपका स्वागत है। और कुछ पूछना हो तो बताइए।', 'ठीक है, फिर मिलते हैं।']);
+  assert.deepEqual([(await fresh('priya ka hisaab'))[2], (await say('ok'))[0], (await say('kab khatam hogi?'))[2]], ['- मोबाइल: 9829044444', 'ठीक है। और कुछ पूछना हो तो बताइए।', '- मोबाइल: 9829044444']);
   // A question may ask for a detail of the member: the sentence gives it, or says that it is not written down
   db.members[3].goal = 'Weight loss';
   assert.deepEqual([(await fresh('priya ka goal kya h?'))[0], (await fresh('priya ki umar kitni hai'))[0], (await fresh('priya ka goal kya h?')).length], ['Priya Jain का लक्ष्य: Weight loss।', 'Priya Jain की उम्र: लिखा नहीं है।', 7]);
