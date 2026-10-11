@@ -33,7 +33,13 @@ const field = (label, control, cls = '') => `<label class="field ${cls}"><span>$
 const input = (name, value, attrs = 'maxlength="200"') => `<input name="${name}" value="${esc(value)}" ${attrs}>`;
 const check = (label, attrs) => `<label class="check"><input type="checkbox" ${attrs}>${label}</label>`;
 const NUM = 'type="number" step="1" min="0" inputmode="numeric"';
-const page = (title, buttons, body) => `<div class="page-head"><h1>${title}</h1><div class="actions">${buttons}</div></div>${body}`;
+// Every page but the first one (the dashboard; for the owner of the service, the list of gyms) has a Back button beside its name.
+const home = () => (S.gym ? '#/dashboard' : '#/accounts');
+const page = (title, buttons, body) => `<div class="page-head"><div class="page-title">${location.hash.split('?')[0] === home() ? '' : `<button class="btn secondary back" data-action="back">${icon('back')}Back</button>`}<h1>${title}</h1></div>
+  <div class="actions">${buttons}</div></div>${body}`;
+// The pages opened in this visit, in order, so that Back goes to the one before. A page reached with nothing before it
+// (a link, a reload) goes back to where it belongs: a member to the list of members, anything else to the first page.
+const trail = [];
 const empty = (title, text, cta = '') => `<div class="empty"><strong>${title}</strong><p class="muted">${text}</p><div class="actions">${cta}</div></div>`;
 const table = (cols, rows) => `<div class="table-wrap"><table><thead><tr>${cols.map((c) => (c[0] === '#' ? `<th class="num">${c.slice(1)}</th>` : `<th>${c}</th>`)).join('')}</tr></thead>
   <tbody>${rows.join('')}</tbody></table></div>`;
@@ -118,6 +124,7 @@ function setData(data) {
     F = { tab: '', q: '', month: '' };
     accounts = null;
     imp = { rows: null, done: null };
+    trail.length = 0;
     talk = [];
     reg = null;
     stopVoice();
@@ -143,6 +150,8 @@ function route() {
   // The owner of the service has the Accounts page, and a gym's own pages once one is opened from there.
   if (!Object.hasOwn(views, name) || (!S.gym && name !== 'accounts')) return location.replace(S.gym ? '#/dashboard' : '#/accounts');
   current = name;
+  if (trail.at(-1) !== location.hash.split('?')[0]) trail.push(location.hash.split('?')[0]);
+  if (trail.length > 60) trail.shift();
   picked.clear();
   main.innerHTML = views[name](id, new URLSearchParams(query)) || notFound;
   // In its last five days a gym is told on its dashboard that its time is ending, and what to pay.
@@ -211,6 +220,11 @@ function openDialog(html) {
 Object.assign(actions, {
   'nav-toggle': () => document.body.classList.toggle('nav-open'),
   'dialog-close': () => dlg.close(),
+  back() {
+    trail.pop(); // this page
+    const before = trail.pop(), here = location.hash.split('?')[0];
+    go(before || (/^#\/(members\/|import)/.test(here) ? '#/members' : home()));
+  },
   retry: () => location.reload(),
   go: (el) => { location.hash = el.dataset.href; },
   // The link itself opens WhatsApp; this only records that today's reminder went out.
@@ -516,7 +530,7 @@ function importRows() {
         <input type="hidden" name="gender" value="${esc(r.gender)}"><input type="hidden" name="age" value="${esc(r.age)}"><input type="hidden" name="batch" value="${esc(r.batch)}"><input type="hidden" name="notes" value="${esc(r.notes)}"></td></tr>`; }))}
     <div class="card-body actions"><button class="btn primary" data-action="import-save">Save these members</button><button class="btn secondary" data-action="import-clear">Throw these rows away</button></div></section>`;
 }
-views.import = () => page('Import old members', '<a class="btn secondary" href="#/members">Back to members</a>', `
+views.import = () => page('Import old members', '', `
   <section class="card"><div class="card-head"><h2>1. Choose a file</h2><span class="hint">A photo of the register, a PDF, an Excel file (.xlsx) or a CSV file. One file, or one page, at a time.</span></div>
     <div class="card-body"><form class="row" data-action="import-read"><input type="file" name="file" required accept="image/*,.pdf,.xlsx,.xls,.csv,.txt" aria-label="File of old members"><button class="btn primary">Read the file</button></form>
       <p class="hint">For a photo: lay the page flat, in good light, with the whole page in the picture. The AI reads it and can misread handwriting, so look through every row before you save.
