@@ -57,7 +57,34 @@ const monthsAfter = (iso, n) => G.addMonths(iso.slice(0, 10), n) + iso.slice(10)
 // PAY_NOTE says where the money goes ('UPI name@bank, or call 98290 00000'). It is shown wherever a gym is asked to pay.
 const payNote = () => G.str(process.env.PAY_NOTE, 200);
 const over = (g) => `Your ${g.renewals.length ? 'plan' : 'free trial'} is over. Pay ₹${PRICE} to start the service again.${payNote() && ` ${payNote()}`}`;
-const gymById = async (id) => (await db.find('gyms', { _id: id })).find(live);
+// ---- who is asking, remembered for a minute in this process
+
+// Finding out who a request comes from takes two trips to the database: the session, then its gym. With the database
+// far from the server that is most of the time a page takes. So both answers are kept here for AUTH_SECONDS, and
+// forgotten the moment that gym changes in any way or anybody is signed out of it.
+// This lives in the server's own memory only, never in Redis: it holds sign-ins.
+// ponytail: with more than one copy of the server, a change made on one reaches the others only when their minute is
+// up. Share the forgetting (a version number on the gym, say) before running two copies.
+const AUTH_SECONDS = 60;
+const remembered = new Map(); // hash of a session token -> { who, gymId, until }
+const gymsKept = new Map();   // gym id -> { g, until }; g is undefined for a gym that does not exist
+function forget(gymId) {
+  if (gymId === undefined) { remembered.clear(); gymsKept.clear(); return; }
+  gymsKept.delete(gymId);
+  for (const [key, r] of remembered) if (r.gymId === gymId) remembered.delete(key);
+}
+async function saveGym(id, patch) {
+  await db.update('gyms', { _id: id }, patch);
+  forget(id);
+}
+async function gymById(id) {
+  const kept = gymsKept.get(id);
+  if (kept && kept.until > Date.now()) return kept.g;
+  const g = (await db.find('gyms', { _id: id })).find(live);
+  if (gymsKept.size > 5000) gymsKept.clear();
+  gymsKept.set(id, { g, until: Date.now() + AUTH_SECONDS * 1000 });
+  return g;
+}
 
 // `details` is the gym as its Settings page holds it: name, owner, mobile, address, timings, amenities, UPI and prices.
 async function createGym(email, password, details) {
@@ -70,13 +97,25 @@ async function createGym(email, password, details) {
 // Who a session cookie belongs to. Only the hash of the token is kept, so a leaked copy of the sessions cannot be
 // replayed. A gym stays signed in until its time runs out: then every device of it is signed out and told to pay.
 async function sessionOf(token) {
-  const s = token && (await db.find('sessions', { _id: sha256(token) }))[0];
+  if (!token) return null;
+  const key = sha256(token), kept = remembered.get(key);
+  // What is remembered still has to be in time: a gym's month can run out within the minute.
+  if (kept && kept.until > Date.now() && (kept.who.admin || stamp() < kept.who.account.validTill)) return kept.who;
+  const who = await readSession(key);
+  if (remembered.size > 20000) remembered.clear();
+  if (who) remembered.set(key, { who, gymId: who.account && who.account._id, until: Math.min(Date.now() + AUTH_SECONDS * 1000, who.until || Infinity) });
+  else remembered.delete(key);
+  return who;
+}
+async function readSession(key) {
+  const [s] = await db.find('sessions', { _id: key });
   if (!s) return null;
-  if (s.admin) return s.until > Date.now() ? { admin: true } : null;
+  if (s.admin) return s.until > Date.now() ? { admin: true, until: s.until } : null;
   const account = await gymById(s.gymId);
   if (!account || account.disabled) return null;
   if (stamp() >= account.validTill) {
     await db.remove('sessions', { gymId: account._id });
+    forget(account._id);
     fail(402, over(account));
   }
   return { account };
@@ -152,9 +191,9 @@ function memberOf(c, periods, paid) {
     fee: sum(periods, 'fee') - sum(paid, 'amount') + paidNow, paid: paidNow, history: periods.slice(0, -1).map(({ months, start, end, fee }) => ({ months, start, end, fee })) };
 }
 async function memberById(gymId, id) {
-  const [c] = await db.find('customers', { _id: id, gymId });
+  const [[c], periods, paid] = await Promise.all([db.find('customers', { _id: id, gymId }), db.find('memberships', { gymId, customerId: id }), db.find('transactions', { gymId, customerId: id })]);
   if (!c || c.deletedAt) fail(404, 'Member not found.');
-  return memberOf(c, await db.find('memberships', { gymId, customerId: id }), await db.find('transactions', { gymId, customerId: id }));
+  return memberOf(c, periods, paid);
 }
 // Everything of one gym.
 async function loadGym(account) {
@@ -179,7 +218,8 @@ async function purgeMember(gymId, id) {
 async function purgeGym(id) {
   for (const name of ['sessions', 'backups', 'exports', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
   await db.remove('gyms', { _id: id });
-  await cache.drop(`records:${id}`);
+  forget(id);
+  await cache.drop(`records:${id}`, `exports:${id}`);
 }
 
 // ---- backups: once a day, everything each gym holds, compressed, kept for BACKUP_DAYS days
@@ -210,7 +250,7 @@ const pay = (gymId, customerId, name, membershipId, amt, mode, date) => amt > 0 
 // Notes that a reminder went out today, so it is not sent or offered again. Older days are dropped.
 async function markSent(gymId, today, key) {
   const { sent } = await gymById(gymId);
-  await db.update('gyms', { _id: gymId }, { sent: { [today]: { ...(sent[today] || {}), [key]: true } } });
+  await saveGym(gymId, { sent: { [today]: { ...(sent[today] || {}), [key]: true } } });
 }
 
 // Sends today's reminders of every gym on WhatsApp. A gym that is switched off or whose time is over sends nothing.
@@ -316,14 +356,14 @@ const open = {
       // The free month starts at the first sign-in, on top of anything already paid for.
       const validTill = g.firstLoginAt ? g.validTill : monthsAfter(g.validTill > at ? g.validTill : at, TRIAL_MONTHS);
       if (at >= validTill) fail(402, over(g));
-      await db.update('gyms', { _id: g._id }, { firstLoginAt: g.firstLoginAt || at, lastLoginAt: at, validTill });
+      await saveGym(g._id, { firstLoginAt: g.firstLoginAt || at, lastLoginAt: at, validTill });
       await db.insert('sessions', { _id: sha256(token), gymId: g._id, loginAt: at });
     }
     setCookie(res, token);
   },
   'POST /api/auth/logout': async ({ req, res }) => {
     const token = cookieOf(req);
-    if (token) await db.remove('sessions', { _id: sha256(token) });
+    if (token) { await db.remove('sessions', { _id: sha256(token) }); remembered.delete(sha256(token)); }
     setCookie(res, '');
   },
 };
@@ -335,7 +375,7 @@ const open = {
 // The owner of the service saves under 'owner', also while a gym is open; a gym saves under its own id.
 const saver = (c) => (c.admin ? 'owner' : c.gymId);
 async function exportsOf(who, hasData) {
-  const kept = (await db.find('exports', { gymId: who })).sort((a, b) => (a.at < b.at) - (a.at > b.at));
+  const kept = (await cache.through(`exports:${who}`, CACHE_SECONDS, () => db.find('exports', { gymId: who }))).sort((a, b) => (a.at < b.at) - (a.at > b.at));
   const due = hasData && (!kept.length || Date.now() - Date.parse(kept[0].at) > EXPORT_DAYS * 864e5);
   return { exports: kept.slice(0, 5).map(({ at, file, place, device }) => ({ at, file, place, device })), exportDue: due, exportDays: EXPORT_DAYS };
 }
@@ -344,6 +384,7 @@ async function exportsOf(who, hasData) {
 const either = {
   'POST /api/exports': async (c) => {
     await db.insert('exports', { _id: newId(), gymId: saver(c), at: stamp(), file: required(c.body.file, 'The file name', 150), place: G.str(c.body.place, 150) || 'Downloads folder', device: G.str(c.body.device, 100) });
+    await cache.drop(`exports:${saver(c)}`);
     return exportsOf(saver(c), true);
   },
   'GET /api/data': async ({ admin, account }) => {
@@ -364,13 +405,14 @@ const gymRoutes = {
   },
   'POST /api/auth/password': async ({ body, account, gymId, req }) => {
     if (typeof body.current !== 'string' || !same(hashed(body.current, account.salt).hash, account.hash)) fail(400, 'The current password is not right.');
-    await db.update('gyms', { _id: gymId }, hashed(newPassword(body.password)));
+    await saveGym(gymId, hashed(newPassword(body.password)));
     const mine = sha256(cookieOf(req) || ''); // every other device is signed out
     for (const s of await db.find('sessions', { gymId })) if (s._id !== mine) await db.remove('sessions', { _id: s._id });
+    forget(gymId);
   },
   'PUT /api/gym': async ({ body, gymId }) => {
     const next = gymFields(body);
-    await db.update('gyms', { _id: gymId }, { details: next });
+    await saveGym(gymId, { details: next });
     return next;
   },
 
@@ -521,7 +563,7 @@ const gymRoutes = {
   'POST /api/seed': write(async ({ account, gymId }) => {
     if ((await db.find('customers', { gymId })).some(live)) fail(400, 'Sample data is only for an empty gym.');
     const today = G.todayISO(), d = account.details;
-    await db.update('gyms', { _id: gymId }, { details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
+    await saveGym(gymId, { details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
       price1: d.price1 || 1000, price3: d.price3 || 2700, price12: d.price12 || 9000, ptPrice: d.ptPrice || 2000, dietPrice: d.dietPrice || 500 } });
     // Written in three goes, one for each kind of record, not one member at a time: each go is a trip to the database.
     const people = [], periods = [], payments = [];
@@ -568,19 +610,19 @@ const adminRoutes = {
   // A deleted gym is signed out and hidden, with everything it holds kept for KEEP_DELETED_DAYS days in case it was a mistake.
   'DELETE /api/admin/gyms/:id': async ({ id }) => {
     if (!(await gymById(id))) fail(404, 'Gym not found.');
-    await db.update('gyms', { _id: id }, { deletedAt: stamp() });
     await db.remove('sessions', { gymId: id });
+    await saveGym(id, { deletedAt: stamp() });
   },
   // Several gyms at once, each deleted as one is: signed out, hidden, and kept for KEEP_DELETED_DAYS days.
   'POST /api/admin/gyms/delete': async ({ body }) => {
     const ids = tickedIds(body.ids), at = stamp(), going = (await db.find('gyms')).filter((g) => live(g) && ids.includes(g._id));
-    await Promise.all(going.map(async (g) => { await db.update('gyms', { _id: g._id }, { deletedAt: at }); await db.remove('sessions', { gymId: g._id }); }));
+    await Promise.all(going.map(async (g) => { await db.remove('sessions', { gymId: g._id }); await saveGym(g._id, { deletedAt: at }); }));
     return { deleted: going.length };
   },
   'POST /api/admin/gyms/:id/restore': async ({ id }) => {
     const [g] = await db.find('gyms', { _id: id });
     if (!g || !g.deletedAt) fail(404, 'Gym not found.');
-    await db.update('gyms', { _id: id }, { deletedAt: null });
+    await saveGym(id, { deletedAt: null });
   },
   // The days a gym can be put back to, newest first.
   'GET /api/admin/gyms/:id/backups': async ({ id }) => (await db.find('backups', { gymId: id })).map((b) => ({ date: b.date, at: b.at, members: b.members })).sort((a, b) => (a.at < b.at) - (a.at > b.at)),
@@ -595,7 +637,7 @@ const adminRoutes = {
       if (b.date !== 'before restore') await snapshot(g, 'before restore');
       for (const name of ['transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
       for (const name of ['customers', 'memberships', 'transactions']) await db.insert(name, then[name].filter((d) => d.gymId === id));
-      await db.update('gyms', { _id: id }, { details: then.details });
+      await saveGym(id, { details: then.details });
       return { members: then.customers.filter(live).length };
     })({ gymId: id });
   },
@@ -611,15 +653,16 @@ const adminRoutes = {
     if ([1, 12].includes(body.addMonths)) {
       // The gym paid: it runs that many months more, from the day its time ends, or from now when that has passed.
       const at = stamp(), till = monthsAfter(g.validTill > at ? g.validTill : at, body.addMonths);
-      await db.update('gyms', { _id: id }, { validTill: till, renewals: [...g.renewals, { at, months: body.addMonths, till }] });
+      await saveGym(id, { validTill: till, renewals: [...g.renewals, { at, months: body.addMonths, till }] });
       return { validTill: till };
     }
     // The login: another username, another password (left empty it stays as it is), or the account switched off or on.
     const email = body.email === undefined ? g.email : loginName(body.email), password = body.password || undefined;
     if (email === g.email && password === undefined && typeof body.disabled !== 'boolean') fail(400, 'Nothing to change.');
     if (email !== g.email && (email === adminEmail() || (await db.find('gyms', { email })).length)) fail(409, 'That username is already taken.');
-    await db.update('gyms', { _id: id }, { email, ...(password !== undefined && hashed(newPassword(password))), ...(typeof body.disabled === 'boolean' && { disabled: body.disabled }) });
+    await saveGym(id, { email, ...(password !== undefined && hashed(newPassword(password))), ...(typeof body.disabled === 'boolean' && { disabled: body.disabled }) });
     await db.remove('sessions', { gymId: id }); // a changed login or a switched-off account signs that gym out everywhere
+    forget(id);
     return undefined;
   },
 };
@@ -680,7 +723,7 @@ async function start(port) {
   return new Promise((resolve, reject) => { server.once('error', reject).listen(port, () => resolve(server)); });
 }
 
-module.exports = { start, runReminders, daily };
+module.exports = { start, runReminders, daily, forget };
 
 if (require.main === module) {
   start(Number(process.env.PORT) || 3000).then(

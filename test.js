@@ -63,6 +63,7 @@ async function apiChecks() {
   Object.assign(process.env, { DATA_DIR: dir, ADMIN_EMAIL: 'owner', ADMIN_PASSWORD: 'owner-password', GEMINI_API_KEY: '', GEMINI_MODEL: '', PAY_NOTE: '', WHATSAPP_TOKEN: '', WHATSAPP_PHONE_ID: '', WHATSAPP_API_VERSION: '', TRUST_PROXY: '', MONGODB_DB: 'gymsaathi_test' });
   if (!MONGO) process.env.MONGODB_URI = '';
   const srv = await require('./server').start(0), db = require('./lib/db');
+  const afresh = () => { require('./server').forget(); require('./lib/cache').clear(); }; // after changing the store behind the app's back
   assert.equal(db.usingMongo, MONGO, MONGO ? 'Put MONGODB_URI in .env first.' : '');
   if (MONGO) { await (await db.ready).dropDatabase(); await db.indexes(); } // what an earlier run that broke off left behind
   const today = G.todayISO();
@@ -144,7 +145,7 @@ async function apiChecks() {
       lists();
       await ok(gym('GET', '/api/data'));
       await ok(gym('POST', '/api/chat', { question: 'किसकी फीस बाकी है?', quick: true }));
-      assert.equal(lists(), 0);
+      assert.deepEqual(asked.splice(0), []); // not one trip to the database: who is asking is remembered as well
       const paidOne = await ok(gym('POST', `/api/members/${rahul.id}/pay`, { amount: 1 }));
       lists();
       assert.deepEqual([G.due((await ok(gym('GET', '/api/data'))).members.find((m) => m.id === rahul.id)), lists()], [8699, 3]);
@@ -213,6 +214,7 @@ async function apiChecks() {
     // When the free month is over the gym is signed out everywhere and told to pay; signing in says the same
     const second = await listed('second.gym'), past = '2020-01-01T00:00:00.000Z';
     await db.update('gyms', { _id: second.id }, { validTill: past });
+    afresh();
     let [code, body] = await other('GET', '/api/data');
     assert.deepEqual([code, body.error], [402, 'Your free trial is over. Pay ₹999 to start the service again.']);
     assert.equal(await status(other('GET', '/api/data')), 401);
@@ -226,6 +228,7 @@ async function apiChecks() {
     // Paying early adds to the time left; and once a paid month is over the message says plan, not trial
     assert.equal((await ok(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 12 }))).validTill, G.addMonths(till.slice(0, 10), 12) + till.slice(10));
     await db.update('gyms', { _id: second.id }, { validTill: past });
+    afresh();
     assert.equal((await other('GET', '/api/data'))[1].error, 'Your plan is over. Pay ₹999 to start the service again.');
     assert.equal(await status(owner('PUT', `/api/admin/gyms/${second.id}`, { addMonths: 5 })), 400);
 
@@ -425,6 +428,7 @@ async function apiChecks() {
     assert.deepEqual([noted.exports.map((e) => e.place), (await ok(owner('GET', '/api/data'))).exportDue, (await ok(gym('GET', '/api/data'))).exports.length], [['Downloads folder'], false, 1]);
     // Eight days on, both are due again
     for (const e of await db.find('exports')) await db.update('exports', { _id: e._id }, { at: new Date(Date.now() - 8 * 864e5).toISOString() });
+    afresh();
     assert.deepEqual([(await ok(gym('GET', '/api/data'))).exportDue, (await ok(owner('GET', '/api/data'))).exportDue], [true, true]);
 
     // Several members ticked on the list go together, each as one deleted member does; ids of another gym, of nobody,
