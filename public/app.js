@@ -51,7 +51,7 @@ const notFound = `<div class="card">${empty('Nothing here', 'This record does no
 // Asks before something is deleted. `action` runs on Yes, with `id` on the button.
 const sure = (title, text, action, id, yes) => openDialog(`<div class="dialog-body"><h2>${esc(title)}</h2><p class="muted">${esc(text)}</p></div>
   <footer class="dialog-foot"><button class="btn secondary" data-action="dialog-close">Cancel</button><button class="btn danger" data-action="${action}" data-id="${esc(id)}">${esc(yes)}</button></footer>`);
-const payDel = (p) => `<button class="btn ghost icon" data-action="payment-edit" data-id="${esc(p.id)}" aria-label="Change payment">${icon('edit')}</button><button class="btn ghost icon" data-action="payment-delete" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-amount="${money(p.amount)}" aria-label="Delete payment">${icon('trash')}</button>`;
+const payDel = (p) => (sampleId(p.id) ? '' : `<button class="btn ghost icon" data-action="payment-edit" data-id="${esc(p.id)}" aria-label="Change payment">${icon('edit')}</button><button class="btn ghost icon" data-action="payment-delete" data-id="${esc(p.id)}" data-name="${esc(p.name)}" data-amount="${money(p.amount)}" aria-label="Delete payment">${icon('trash')}</button>`);
 
 // Saves a table as a .csv file, which Excel opens. A cell that starts like a formula is written as plain text.
 function saveTable(name, rows) {
@@ -66,7 +66,8 @@ const yes = (v) => (v ? 'Yes' : 'No');
 
 // Ticking rows of a list. The bar above the list says how many are ticked and deletes them together.
 const PICK_ALL = '<input type="checkbox" data-action="pick-all" aria-label="Tick all">';
-const pickBox = (id, name) => `<td class="pick"><input type="checkbox" data-action="pick" value="${esc(id)}" ${picked.has(id) ? 'checked' : ''} aria-label="Tick ${esc(name)}"></td>`;
+const sampleId = (id) => /^5a[012]\d{13}$/.test(id); // a member, membership or payment out of the sample file
+const pickBox = (id, name) => (sampleId(id) ? '<td class="pick"></td>' : `<td class="pick"><input type="checkbox" data-action="pick" value="${esc(id)}" ${picked.has(id) ? 'checked' : ''} aria-label="Tick ${esc(name)}"></td>`);
 const bulkBar = () => `<div class="bulk" id="bulk" ${picked.size ? '' : 'hidden'}><strong id="bulkCount">${picked.size} ticked</strong>
   <button class="btn danger" data-action="bulk-delete">${icon('trash')}Delete ticked</button><button class="btn ghost" data-action="pick-none">Untick all</button></div>`;
 function showPicked() {
@@ -339,19 +340,20 @@ views.members = (id) => {
   if (!m) return '';
   const owed = G.due(m), pays = S.payments.filter((p) => p.memberId === m.id).sort((a, b) => (a.date < b.date) - (a.date > b.date));
   const row = (label, value) => (value || value === 0 ? `<tr><td class="muted">${label}</td><td>${esc(value)}</td></tr>` : '');
-  return page(`${esc(m.name)} ${pill(m)}`, `<button class="btn secondary" data-action="member-edit" data-id="${esc(m.id)}">${icon('edit')}Edit</button>
+  // A sample member is for looking at: it has no button that would change it.
+  return page(`${esc(m.name)} ${pill(m)}`, m.sample ? '<span class="pill partial">Sample member</span>' : `<button class="btn secondary" data-action="member-edit" data-id="${esc(m.id)}">${icon('edit')}Edit</button>
       <button class="btn danger" data-action="member-delete" data-id="${esc(m.id)}" data-name="${esc(m.name)}">${icon('trash')}Delete</button>`, `
     <div class="cols">
       <section class="card"><div class="card-head"><h2>Membership</h2></div><div class="card-body">
         <p><strong>${planName(m.months)}</strong>${m.pt ? ' + personal trainer' : ''}${m.diet ? ' + diet plan' : ''}<br>${esc(G.fmtDate(m.start))} to ${esc(G.fmtDate(m.end))}</p>
         <p>Fee ${money(m.fee)}, paid ${money(m.paid)}${owed ? `, <span class="low">pending ${money(owed)}</span>` : ', nothing pending'}</p>
-        <div class="actions">
+        ${m.sample ? '<p class="hint">This is a sample member, for looking around. Add your own member to take a payment or renew.</p>' : `<div class="actions">
           ${owed ? `<button class="btn primary" data-action="pay-full" data-id="${esc(m.id)}" data-mode="Cash">Got ${money(owed)} in cash</button>
             <button class="btn secondary" data-action="pay-full" data-id="${esc(m.id)}" data-mode="UPI">Got it by UPI</button>
             <button class="btn secondary" data-action="pay-part" data-id="${esc(m.id)}">Part payment</button>` : ''}
           <button class="btn ${owed ? 'secondary' : 'primary'}" data-action="renew" data-id="${esc(m.id)}">Renew</button>
           <button class="btn ghost" data-action="period-edit" data-id="${esc(m.id)}">Correct this membership</button>
-          ${m.history.length ? `<button class="btn ghost" data-action="period-delete" data-id="${esc(m.id)}" data-name="${esc(m.name)}">Undo this renewal</button>` : ''}</div>
+          ${m.history.length ? `<button class="btn ghost" data-action="period-delete" data-id="${esc(m.id)}" data-name="${esc(m.name)}">Undo this renewal</button>` : ''}</div>`}
       </div></section>
       <section class="card"><div class="card-head"><h2>WhatsApp</h2></div><div class="card-body">
         <p class="muted">Opens WhatsApp on ${esc(m.phone)} with the message typed in.</p>

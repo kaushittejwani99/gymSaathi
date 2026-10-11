@@ -15,6 +15,7 @@ const db = require('./lib/db');
 const cache = require('./lib/cache');
 const ai = require('./lib/ai');
 const wa = require('./lib/whatsapp');
+const sample = require('./lib/sample');
 
 const MAX_BODY = 256 * 1024;
 const MAX_FILE = 12 * 1024 * 1024; // a photo or a PDF of old records, sent once to be read
@@ -174,12 +175,10 @@ const write = (fn) => (c) => {
   return run;
 };
 
-// The members that 'Load sample members' makes: name, mobile, months, days since joining, fee, paid.
-const SAMPLE = [['Rahul Sharma', '9829011101', 3, -80, 2700, 2700], ['Priya Jain', '9829011102', 1, -27, 1000, 1000], ['Amit Soni', '9829011103', 1, -2, 1000, 0],
-  ['Neha Agarwal', '9829011104', 12, -200, 9000, 5000], ['Suresh Mali', '9829011105', 1, -40, 1000, 1000], ['Kavita Rathore', '9829011106', 3, -10, 2700, 2700],
-  ['Deepak Kothari', '9829011107', 1, 0, 3000, 1000], ['Sunita Vyas', '9829011108', 1, -29, 1000, 1000]];
-// A sample member is marked as one. Those made before the mark existed are known by their name and number.
-const isSample = (c) => c.sample === true || SAMPLE.some(([name, phone]) => c.name === name && c.phone === phone);
+// Sample members are in lib/sample.js and are shown while the gym carries the mark `sample`. Gyms that loaded them
+// before that have them as real records: those are known by their name and number, and go when the sample is removed.
+const isSample = (c) => c.sample === true || sample.ROWS.some(([name, phone]) => c.name === name && c.phone === phone);
+const READ_ONLY = 'This is a sample member, for looking around. It cannot be changed. Remove the sample members and add your own.';
 
 // A member as the screens and the reminders read one: who they are, the period running now, what it cost with
 // anything still owed from earlier periods, and what has been paid since it began. So fee - paid is what they owe.
@@ -191,6 +190,11 @@ function memberOf(c, periods, paid) {
     fee: sum(periods, 'fee') - sum(paid, 'amount') + paidNow, paid: paidNow, history: periods.slice(0, -1).map(({ months, start, end, fee }) => ({ months, start, end, fee })) };
 }
 async function memberById(gymId, id) {
+  if (sample.isSampleId(id)) {
+    const g = await gymById(gymId), kept = g && g.sample ? sample.records(gymId, G.todayISO()) : null, c = kept && kept.customers.find((x) => x._id === id);
+    if (!c) fail(404, 'Member not found.');
+    return memberOf(c, kept.memberships.filter((p) => p.customerId === id), kept.transactions.filter((t) => t.customerId === id));
+  }
   const [[c], periods, paid] = await Promise.all([db.find('customers', { _id: id, gymId }), db.find('memberships', { gymId, customerId: id }), db.find('transactions', { gymId, customerId: id })]);
   if (!c || c.deletedAt) fail(404, 'Member not found.');
   return memberOf(c, periods, paid);
@@ -198,8 +202,10 @@ async function memberById(gymId, id) {
 // Everything of one gym.
 async function loadGym(account) {
   // The three reads below are what every page of a gym needs, so their answer is kept until the gym changes something.
-  const [all, periods, everyPaid] = await cache.through(`records:${account._id}`, CACHE_SECONDS,
+  const own = await cache.through(`records:${account._id}`, CACHE_SECONDS,
     () => Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id }))));
+  const shown = account.sample ? sample.records(account._id, G.todayISO()) : { customers: [], memberships: [], transactions: [] };
+  const all = [...shown.customers, ...own[0]], periods = [...shown.memberships, ...own[1]], everyPaid = [...shown.transactions, ...own[2]];
   const customers = all.filter(live), here = new Set(customers.map((c) => c._id));
   const paid = everyPaid.filter((t) => here.has(t.customerId)).sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
   return { gym: account.details, sent: account.sent, deleted: all.filter((c) => c.deletedAt).map((c) => ({ id: c._id, name: c.name, phone: c.phone, deletedAt: c.deletedAt })),
@@ -259,7 +265,7 @@ async function runReminders(today = G.todayISO()) {
   const now = stamp(), count = { sent: 0, failed: 0 };
   for (const account of await db.find('gyms')) {
     if (account.deletedAt || account.disabled || !(account.validTill > now)) continue;
-    for (const r of G.reminders(await loadGym(account), today)) {
+    for (const r of G.reminders(await loadGym(account), today).filter((x) => !sample.isSampleId(x.memberId))) {
       try {
         await wa.send(r.phone, G.TEMPLATES[r.type].name, r.params);
         await write(() => markSent(account._id, today, `${r.memberId}:${r.type}`))({ gymId: account._id });
@@ -391,7 +397,7 @@ const either = {
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
     // A backup is asked for only where there is something to keep: a gym for the owner, a member for a gym.
     const data = account && await loadGym(account);
-    const saved = await exportsOf(admin ? 'owner' : account._id, admin ? (await db.find('gyms', {}, ['deletedAt'])).some(live) : data.members.length > 0);
+    const saved = await exportsOf(admin ? 'owner' : account._id, admin ? (await db.find('gyms', {}, ['deletedAt'])).some(live) : data.members.some((m) => !sample.isSampleId(m.id)));
     if (!account) return { user, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, ...saved, aiEnabled: ai.aiEnabled() };
     return { user, ...data, ...saved, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
@@ -451,11 +457,12 @@ const gymRoutes = {
     await db.update('customers', { _id: id, gymId }, { deletedAt: null });
     return memberById(gymId, id);
   }),
-  // The sample members that 'Load sample members' made, all at once.
-  'DELETE /api/sample': write(async ({ gymId }) => {
-    const sample = (await db.find('customers', { gymId })).filter((c) => live(c) && isSample(c));
-    await Promise.all(sample.map((c) => purgeMember(gymId, c._id))); // all together, and for good: nothing here is worth bringing back
-    return { removed: sample.length };
+  // Takes the sample members away: nothing is deleted for them, the gym's mark simply comes off.
+  'DELETE /api/sample': write(async ({ account, gymId }) => {
+    const old = (await db.find('customers', { gymId })).filter((c) => live(c) && isSample(c));
+    await Promise.all(old.map((c) => purgeMember(gymId, c._id))); // all together, and for good: nothing here is worth bringing back
+    if (account.sample) await saveGym(gymId, { sample: false });
+    return { removed: old.length + (account.sample ? sample.ROWS.length : 0) };
   }),
   // A payment typed in wrongly is corrected: its amount, how it was paid, its date. Never to more than was owed.
   'PUT /api/payments/:id': write(async ({ body, gymId, id }) => {
@@ -559,23 +566,14 @@ const gymRoutes = {
     return { added: people.length, skipped };
   }),
 
-  // Sample members, for looking around an empty gym.
+  // Sample members, for looking around an empty gym. Nothing is written for them: the gym is marked, and given
+  // prices where it has none so that the assistant can quote a fee.
   'POST /api/seed': write(async ({ account, gymId }) => {
-    if ((await db.find('customers', { gymId })).some(live)) fail(400, 'Sample data is only for an empty gym.');
-    const today = G.todayISO(), d = account.details;
-    await saveGym(gymId, { details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
+    if ((await db.find('customers', { gymId }, ['deletedAt'])).some(live)) fail(400, 'Sample data is only for an empty gym.');
+    const d = account.details;
+    await saveGym(gymId, { sample: true, details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
       price1: d.price1 || 1000, price3: d.price3 || 2700, price12: d.price12 || 9000, ptPrice: d.ptPrice || 2000, dietPrice: d.dietPrice || 500 } });
-    // Written in three goes, one for each kind of record, not one member at a time: each go is a trip to the database.
-    const people = [], periods = [], payments = [];
-    for (const [name, phone, months, ago, fee, paid] of SAMPLE) {
-      const start = G.addDays(today, ago), id = newId(), membershipId = newId();
-      periods.push({ _id: membershipId, gymId, customerId: id, months, start, end: G.endOf(start, months), fee, pt: fee === 3000, diet: false, createdAt: stamp() });
-      people.push({ _id: id, gymId, name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', notes: '', joinedAt: start, sample: true });
-      if (paid > 0) payments.push({ _id: newId(), gymId, customerId: id, membershipId, name, amount: paid, mode: 'Cash', date: start, createdAt: stamp() });
-    }
-    await db.insert('memberships', periods);
-    await db.insert('customers', people);
-    await db.insert('transactions', payments);
+    return { added: sample.ROWS.length };
   }),
 };
 
@@ -674,6 +672,7 @@ async function api(req, res, url) {
   if (!route) fail(404, 'Not found.');
   // Browsers cannot send this content type across sites without a preflight: with the SameSite cookie, that is the CSRF defence.
   if (req.method !== 'GET' && !/^application\/json\b/i.test(req.headers['content-type'] || '')) fail(415, 'Send the request as application/json.');
+  if (id && sample.isSampleId(id) && req.method !== 'GET') fail(400, READ_ONLY);
   const c = { req, res, id };
   if (!open[key]) {
     const who = (await sessionOf(cookieOf(req))) || fail(401, 'Please sign in.'); // before the body is read: a stranger cannot make the server hold a large one

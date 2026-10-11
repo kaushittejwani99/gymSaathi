@@ -364,14 +364,27 @@ async function apiChecks() {
     await ok(gym('DELETE', `/api/payments/${wrong.id}`));
     const back = await ok(gym('DELETE', `/api/members/${rahul.id}/period`));
     assert.deepEqual([back.months, back.end, back.fee, back.paid, back.history.length, await status(gym('DELETE', `/api/members/${rahul.id}/period`))], [3, rahul.end, 8700, 5000, 0, 400]);
-    // Sample members go in one step and leave the gym's own members alone
+    // Sample members come from a file, not the database: loading them only marks the gym. They are shown, counted and
+    // asked about like any member, but nothing about them can be changed, and nothing is written down for them
     const ox = browser();
     await ok(ox('POST', '/api/auth/login', { email: 'oxfit', password: 'first-password' }));
-    await ok(ox('POST', '/api/seed'));
+    assert.equal((await ok(ox('POST', '/api/seed'))).added, 8);
+    data = await ok(ox('GET', '/api/data'));
+    const amitS = data.members.find((m) => m.name === 'Amit Soni');
+    assert.deepEqual([data.members.length, data.members.every((m) => m.sample), amitS.start, G.due(amitS), data.payments.length, data.exportDue, (await db.find('customers', { gymId: third })).length, (await db.find('transactions', { gymId: third })).length],
+      [8, true, G.addDays(today, -2), 1000, 7, false, 0, 0]);
+    assert.deepEqual([(await ok(ox('POST', '/api/chat', { question: 'किसकी फीस बाकी है?', quick: true }))).answer.includes('Amit Soni'), await status(ox('POST', `/api/members/${amitS.id}/pay`, { amount: 100 })),
+      await status(ox('PUT', `/api/members/${amitS.id}`, { name: 'X', phone: '9829011103' })), await status(ox('DELETE', `/api/members/${amitS.id}`)), await status(ox('POST', `/api/members/${amitS.id}/renew`, { months: 1 })),
+      await status(ox('DELETE', `/api/payments/${data.payments[0].id}`)), (await ok(ox('POST', '/api/members/delete', { ids: [amitS.id] }))).deleted, await status(ox('POST', '/api/reminders/sent', { memberId: amitS.id, type: 'fees' })),
+      await status(ox('POST', '/api/seed')), (await ok(owner('GET', '/api/admin/gyms'))).find((g) => g.email === 'oxfit').members], [true, 400, 400, 400, 400, 400, 0, 200, 200, 0]);
+    // The gym's own members sit beside them. Taking the sample away leaves those alone; so does a sample member that an
+    // older version wrote into the database, which goes with the rest
     await ok(ox('POST', '/api/members', { name: 'Own Member', phone: '9829011199', months: 1 }));
-    await db.update('customers', { gymId: third, phone: '9829011101' }, { sample: false }); // one loaded before sample members were marked
+    await db.insert('memberships', { _id: 'aaaaaaaaaaaaaaa1', gymId: third, customerId: 'aaaaaaaaaaaaaaa0', months: 1, start: today, end: G.endOf(today, 1), fee: 1000, pt: false, diet: false, createdAt: new Date().toISOString() });
+    await db.insert('customers', { _id: 'aaaaaaaaaaaaaaa0', gymId: third, name: 'Rahul Sharma', phone: '9829011101', joinedAt: today });
+    afresh();
     assert.deepEqual([(await ok(ox('GET', '/api/data'))).members.length, (await ok(ox('DELETE', '/api/sample'))).removed, (await ok(ox('GET', '/api/data'))).members.map((m) => m.name),
-      (await db.find('memberships', { gymId: third })).length, (await db.find('transactions', { gymId: third })).length], [9, 8, ['Own Member'], 1, 0]);
+      (await db.find('memberships', { gymId: third })).length, (await db.find('transactions', { gymId: third })).length, (await ok(ox('DELETE', '/api/sample'))).removed], [10, 9, ['Own Member'], 1, 0, 0]);
     // The owner of the service deletes a gym: it is signed out and hidden, yet comes back with all it held
     assert.deepEqual([await status(ox('DELETE', `/api/admin/gyms/${third}`)), (await ok(owner('DELETE', `/api/admin/gyms/${third}`))).ok, await status(ox('GET', '/api/data')),
       await status(ox('POST', '/api/auth/login', { email: 'oxfit', password: 'first-password' })), !!(await listed('oxfit')).deletedAt, (await db.find('customers', { gymId: third })).length], [403, true, 401, 401, true, 1]);

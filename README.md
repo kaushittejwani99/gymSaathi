@@ -166,6 +166,7 @@ Good to know:
 | `lib/ai.js` | the registration talk and the question answers |
 | `lib/db.js` | storage: the seven collections, as files or in MongoDB |
 | `lib/cache.js` | the cache: in memory, or in Redis |
+| `lib/sample.js` | the sample members. They are shown from this file and never written to the database, so loading and removing them is instant; they can be looked at but not changed |
 | `lib/xlsx.js` | reading an Excel file's first sheet |
 | `restore.js` | putting a downloaded backup back |
 | `lib/whatsapp.js` | sending a template message through Meta's WhatsApp Cloud API |
