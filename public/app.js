@@ -682,7 +682,8 @@ async function heard(text) {
   thinking = true;
   renderTalk();
   try {
-    const r = await api('POST', '/api/chat', { question: text });
+    // The last few turns go along, so 'kab khatam hogi?' after a question about Meena is understood to be about her.
+    const r = await api('POST', '/api/chat', { question: text, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) });
     thinking = false;
     if (r.start === 'register') return startReg();
     return says(r.answer);

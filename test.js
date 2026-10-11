@@ -190,6 +190,14 @@ async function apiChecks() {
     assert.ok(owes.answer.includes('Rahul Sharma') && owes.answer.includes('₹3,700'), owes.answer);
     const one = await ok(gym('POST', '/api/chat', { question: 'Rahul ki membership kab khatam hogi', quick: true }));
     assert.ok(one.answer.includes('Rahul Sharma') && one.answer.includes('मेंबरशिप:'), one.answer);
+    // The talk so far goes along with a question. A follow-up that names nobody is about whoever was last named; one that
+    // asks who or how many is about everybody, as before
+    const soFar = [{ who: 'me', text: 'Rahul ki membership kab shuru hui?' }, { who: 'ai', text: 'Rahul Sharma की मेंबरशिप आज शुरू हुई।' }];
+    const follow = await ok(gym('POST', '/api/chat', { question: 'kab khatam hogi?', quick: true, history: soFar }));
+    const alone = await ok(gym('POST', '/api/chat', { question: 'kab khatam hogi?', quick: true }));
+    const everyone = await ok(gym('POST', '/api/chat', { question: 'kiski fees baaki hai?', quick: true, history: soFar }));
+    assert.deepEqual([follow.answer.includes('Rahul Sharma') && follow.answer.includes('मेंबरशिप:'), alone.answer.includes('Rahul Sharma'), alone.answer.includes('खत्म होने वाली'), everyone.answer.includes('मेंबर की फीस बाकी है'),
+      await status(gym('POST', '/api/chat', { question: 'kab khatam hogi?', quick: true, history: 'not a list' }))], [true, false, true, true, 200]);
     assert.equal((await ok(gym('POST', '/api/chat', { question: 'नया मेंबर जोड़ो' }))).start, 'register');
     assert.ok(!(await ok(other('POST', '/api/chat', { question: 'किसकी फीस बाकी है?', quick: true }))).answer.includes('Rahul'));
 
@@ -206,6 +214,16 @@ async function apiChecks() {
       said = 'Sorry, I cannot help.';
       const plainly = await ok(gym('POST', '/api/register/turn', { form: { name: 'Priya Jain' }, asked: 'phone', said: 'मेरा नंबर है 98290 22222 लिख लीजिए' }));
       assert.deepEqual([plainly.form.phone, plainly.next], ['9829022222', 'gender']);
+      // The AI is given the earlier turns above the question, with dates written out, and never more than the last six
+      let sent = '';
+      const stubbed = global.fetch;
+      global.fetch = (url, init) => { if (String(url).startsWith('https://generativelanguage.googleapis.com/')) sent = JSON.parse(init.body).input; return stubbed(url, init); };
+      said = 'Rahul Sharma: 9 Jan 2027 को।';
+      const long = [...Array.from({ length: 5 }, (x, i) => ({ who: 'me', text: `old ${i}` })), ...soFar];
+      const answered = await ok(gym('POST', '/api/chat', { question: 'kab khatam hogi?', history: long }));
+      global.fetch = stubbed;
+      assert.deepEqual([answered.mode, answered.answer, sent.includes('Earlier in this talk:\nOwner: old 1\n'), sent.includes('old 0'), sent.includes('Owner: Rahul ki membership kab shuru hui?\nAssistant: Rahul Sharma की मेंबरशिप आज शुरू हुई।\n\nQuestion: kab khatam hogi?'),
+        /from \d{1,2} [A-Z][a-z]{2} \d{4} to \d{1,2} [A-Z][a-z]{2} \d{4}/.test(sent), /\d{4}-\d\d-\d\d/.test(sent)], ['ai', 'Rahul Sharma: 9 Jan 2027 को।', true, false, true, true, false]);
     } finally {
       process.env.GEMINI_API_KEY = '';
       global.fetch = realFetch;
