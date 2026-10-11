@@ -657,10 +657,11 @@ async function regTurn(said) {
   try {
     const r = await api('POST', '/api/register/turn', { form: reg.form, asked: reg.asked, said, tries: reg.tries });
     if (r.setup) { reg = null; thinking = false; return await says(r.say, { settings: true }); } // the gym has no prices yet
+    if (r.cancel) { reg = null; thinking = false; return await says(r.say); } // 'cancel karo', said part of the way through
     Object.assign(reg, { form: r.form, asked: r.next, tries: r.tries, done: r.done, fee: r.fee });
     thinking = false;
     await says(r.say);
-    if (!r.done && mine === turn) listenNext();
+    if (mine === turn) listenNext(); // after the last question too: 'shall I save?' is answered aloud as well
   } finally {
     thinking = false;
     renderTalk();
@@ -718,12 +719,15 @@ async function heard(text) {
   renderTalk();
   try {
     // The last few turns go along, so 'kab khatam hogi?' after a question about Meena is understood to be about her.
-    const r = await api('POST', '/api/chat', { question: text, confirming: !!asked, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) });
+    const filled = !!(reg && reg.done);
+    const r = await api('POST', '/api/chat', { question: text, confirming: !!asked || filled, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) });
     const done = r.run && asked ? await carryOut(asked) : '';
     thinking = false;
+    // The filled form waits for a yes as well: 'haan, save kar do' saves the member, a no drops the form.
+    if (filled && (r.run || r.no)) return await actions[r.run ? 'reg-save' : 'reg-cancel']();
     if (done) return await says(done);
     if (r.start === 'register') return startReg();
-    await says(r.answer, r.pending && { pending: r.pending });
+    await says(r.answer, { pending: r.pending, remind: r.remind, page: r.page });
     if (r.pending && mine === turn) listenNext(); // it asked 'shall I?' and now listens for the yes
     return undefined;
   } finally {
@@ -734,6 +738,11 @@ async function heard(text) {
 // Does what the owner said yes to, by the same requests as the buttons on the member's page, and reads the gym afresh
 // so that every page shows it. Returns what to say.
 async function carryOut({ do: what, id, body }) {
+  if (what === 'payall') {
+    const all = await api('POST', '/api/members/pay', body);
+    await refresh();
+    return `${all.paid} मेंबर की फीस जमा हो गई, कुल ${G.money(all.total)}।`;
+  }
   const m = await api(what === 'edit' ? 'PUT' : 'POST', `/api/members/${id}${what === 'edit' ? '' : `/${what}`}`, body);
   await refresh();
   const owed = G.due(m) ? `अब ${G.money(G.due(m))} बाकी हैं।` : 'अब कोई फीस बाकी नहीं है।';
@@ -758,8 +767,10 @@ function regCard() {
 function renderTalk() {
   const log = $('#talk');
   if (!log) return;
-  log.innerHTML = (talk.length ? talk.map((t) => { const m = t.welcome && byId(S.members, t.welcome); return `<div class="msg ${t.who === 'me' ? 'user' : ''}">${esc(t.text)}
+  log.innerHTML = (talk.length ? talk.map((t) => { const m = t.welcome && byId(S.members, t.welcome), due = t.remind && byId(S.members, t.remind.id), page = /^(dashboard|settings|members\/[a-f0-9]{16})$/.test(t.page) && t.page; return `<div class="msg ${t.who === 'me' ? 'user' : ''}">${esc(t.text)}
       ${m ? `<div class="msg-meta">${waBtn(m, 'welcome', 'Send welcome on WhatsApp', 'primary')}<a class="btn secondary" href="#/members/${esc(m.id)}">Open member</a></div>` : ''}
+      ${due && ['fees', 'expiring', 'expired'].includes(t.remind.type) ? `<div class="msg-meta">${waBtn(due, t.remind.type, 'Send on WhatsApp', 'primary')}</div>` : ''}
+      ${page ? `<div class="msg-meta"><a class="btn secondary" href="#/${page}">Open ${page.startsWith('members') ? 'member' : page}</a></div>` : ''}
       ${t.pending ? '<div class="msg-meta"><button class="btn primary" data-action="bolo-ask">हाँ, कर दो</button><button class="btn secondary" data-action="bolo-ask">नहीं</button></div>' : ''}
       ${t.settings ? '<div class="msg-meta"><a class="btn primary" href="#/settings">Fill in the gym prices</a></div>' : ''}${t.hello && talk.length === 1 ? `<div class="msg-meta">${askChips()}</div>` : ''}</div>`; }).join('')
     : `<p class="muted">Press <strong>New member</strong> and answer the questions aloud, or ask about your gym:</p>

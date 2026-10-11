@@ -509,6 +509,14 @@ const gymRoutes = {
     await pay(gymId, id, m.name, m.membershipId, amt, body.mode, body.date ? dateOf(body.date, 'The date') : G.todayISO());
     return memberById(gymId, id);
   }),
+  // 'They have all paid': everything each of these members still owes is taken, in one go. Whoever owes nothing is passed over.
+  'POST /api/members/pay': write(async ({ body, account, gymId }) => {
+    const ids = new Set(tickedIds(body.ids)), today = G.todayISO(), mode = MODES.includes(body.mode) ? body.mode : 'Cash';
+    const paid = (await loadGym(account)).members.filter((m) => ids.has(m.id) && !m.sample && G.due(m) > 0)
+      .map((m) => ({ _id: newId(), gymId, customerId: m.id, membershipId: m.membershipId, name: m.name, amount: G.due(m), mode, date: today, createdAt: stamp() }));
+    if (paid.length) await db.insert('transactions', paid);
+    return { paid: paid.length, total: sum(paid, 'amount') };
+  }),
   // Noted when the owner opens WhatsApp for a reminder, so the same one is not offered again that day.
   'POST /api/reminders/sent': write(async ({ body, gymId }) => {
     const today = G.todayISO(), m = await memberById(gymId, G.str(body.memberId, 40));
