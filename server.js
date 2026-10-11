@@ -387,19 +387,28 @@ async function exportsOf(who, hasData) {
 }
 
 // For a gym, and for the owner of the service with or without a gym opened.
+// How many times each gym was changed since the server started, and all gyms together under 'all'. An open page asks
+// for its number every few seconds and reads everything afresh when it has moved: that is how what is done on the
+// phone, on any page or through the assistant, shows on the computer without a reload.
+// ponytail: counted in this process, like the write queue, so run one copy of the server.
+const changes = new Map();
+const QUIET = new Set(['POST /api/chat', 'POST /api/register/turn', 'POST /api/import/read']); // these change nothing
+
 const either = {
+  'GET /api/version': async ({ gymId }) => ({ n: changes.get(gymId || 'all') || 0 }),
   'POST /api/exports': async (c) => {
     await db.insert('exports', { _id: newId(), gymId: saver(c), at: stamp(), file: required(c.body.file, 'The file name', 150), place: G.str(c.body.place, 150) || 'Downloads folder', device: G.str(c.body.device, 100) });
     await cache.drop(`exports:${saver(c)}`);
     return exportsOf(saver(c), true);
   },
-  'GET /api/data': async ({ admin, account }) => {
+  'GET /api/data': async ({ admin, account, gymId }) => {
+    const version = changes.get(gymId || 'all') || 0; // read before the records, so a change during the read is asked about again
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
     // A backup is asked for only where there is something to keep: a gym for the owner, a member for a gym.
     const data = account && await loadGym(account);
     const saved = await exportsOf(admin ? 'owner' : account._id, admin ? (await db.find('gyms', {}, ['deletedAt'])).some(live) : data.members.some((m) => !sample.isSampleId(m.id)));
-    if (!account) return { user, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, ...saved, aiEnabled: ai.aiEnabled() };
-    return { user, ...data, ...saved, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
+    if (!account) return { user, version, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, ...saved, aiEnabled: ai.aiEnabled() };
+    return { user, version, ...data, ...saved, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
 };
 
@@ -693,6 +702,7 @@ async function api(req, res, url) {
   }
   c.body = req.method === 'GET' ? {} : await readJsonBody(req, key === 'POST /api/import/read' ? MAX_FILE : MAX_BODY);
   const out = await route(c);
+  if (req.method !== 'GET' && !QUIET.has(key)) for (const k of ['all', c.gymId]) if (k) changes.set(k, (changes.get(k) || 0) + 1);
   if (!res.headersSent) json(res, 200, out || { ok: true });
 }
 

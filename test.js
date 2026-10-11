@@ -95,7 +95,9 @@ async function talkChecks() {
     ['personal trainer kis kis ne liya hai', 'पर्सनल ट्रेनर वाले: 1 मेंबर।', 2], ['ladies kitni hain', 'महिला मेंबर: 1 मेंबर।', 2], ['शाम को कौन आता है', 'शाम के बैच में: 1 मेंबर।', 2], ['kitne member hain', 'कुल 4 मेंबर हैं।', 4],
     ['is mahine kitne naye member aaye', 'इस महीने 4 नए मेंबर जुड़े।', 5], ['sabse zyada fees kiski baaki hai', '2 मेंबर की फीस बाकी है, कुल ₹700।', 3], ['aaj mausam kaisa hai', 'यह मुझे समझ नहीं आया', 7],
     ['priya ko reminder bhejo', 'Priya Jain के लिए बाकी फीस का रिमाइंडर तैयार है।', 'fees'], ['मीना को रिमाइंडर भेज दो', 'Meena Das के लिए मेंबरशिप खत्म हो जाने का रिमाइंडर', 'expired'], ['rahul ko reminder bhejo', 'Rahul Sharma की न फीस बाकी है', 1],
-    ['sabko reminder bhej do', 'सबको एक साथ भेजना मुझसे नहीं होता।', 'dashboard'], ['priya ko delete kar do', 'यह Priya Jain के पेज से होता है', 'members/d'], ['priya ki fees maaf kar do', 'यह Priya Jain के पेज से होता है', 'members/d'],
+    ['sabko reminder bhej do', 'सबको एक साथ भेजना मुझसे नहीं होता।', 'dashboard'], ['priya ko delete kar do', 'Priya Jain (9829044444) को जिम से हटा दूँ?', 'delete'], ['मीना को हटा दो', 'Meena Das (9829066666) को जिम से हटा दूँ?', 'delete'],
+    ['priya ka weight 62 kar do', 'Priya Jain (9829044444) की जानकारी बदलूँ?', 'edit'], ['priya ka number 98290 12345 kar do', 'Priya Jain (9829044444) की जानकारी बदलूँ?', 'edit'], ['priya ka number kya hai', 'Priya Jain की मेंबरशिप', 7],
+['priya ki fees maaf kar do', 'यह Priya Jain के पेज से होता है', 'members/d'],
     ['प्रिया के कितने दिन बचे हैं', 'Priya Jain की मेंबरशिप 31 Oct 2026 तक है', 7], ['priya ko do saal ke liye renew karo', 'Priya Jain (9829044444) की मेंबरशिप 24 महीने के लिए रिन्यू करूँ?', 'renew'],
     // 'they have all paid': everybody's pending fees in one go, the sample member left out
     ['In sabne kardi fees zama', 'जिन 1 मेंबर की फीस बाकी है, उन सबकी पूरी बाकी फीस, कुल ₹400, कैश में जमा करूँ?', 'payall'], ['sabki fees jama kar do upi se', 'जिन 1 मेंबर की फीस बाकी है, उन सबकी पूरी बाकी फीस, कुल ₹400, UPI से जमा करूँ?', 'payall'],
@@ -104,6 +106,10 @@ async function talkChecks() {
     assert.deepEqual([said, lines[0].startsWith(begins) || lines[0], r.pending ? r.pending.do : r.remind ? r.remind.type : r.page || lines.length], [said, true, more]);
   }
   assert.equal((await ai.chat({ question: 'priya ka hisaab', db: shop, today })).answer.split('\n')[4], '- स्थिति: चालू (20 दिन बाकी)');
+  // Somebody deleted is known to be gone, and somebody unknown is said to be unknown
+  assert.deepEqual([(await ai.chat({ question: 'गोपाल का हिसाब', db: { ...shop, deleted: [{ id: 'x', name: 'Gopal Mali', phone: '9829099999' }] }, today })).answer.slice(0, 31), (await ai.chat({ question: 'suresh ka hisaab', db: shop, today })).answer.slice(0, 29)],
+    ['Gopal Mali को हटाया जा चुका है।', 'इस नाम का कोई मेंबर नहीं मिला']);
+  assert.deepEqual([(await ai.chat({ question: 'priya ka number 98290 12345 kar do', db: shop, today })).pending.body.phone, (await ai.chat({ question: 'priya ka weight 62 kar do', db: shop, today })).answer.split('\n')[1]], ['9829012345', '- वज़न: 62']);
   // In a registration: two years is 24 months, half the fee is a sum, 'cancel karo' stops it, and the filled form asks
   // whether to save, which a yes answers
   const full = { name: 'Aman', phone: '9829012345', gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', pt: false, diet: false, months: 3 };
@@ -143,8 +149,8 @@ async function talkChecks() {
     const editing = await told({ do: 'edit', mobile: '9829044444', set: { goal: 'Muscle gain', weight: 62, phone: '12345', months: 12, fee: 0, gymId: 'x' } });
     assert.deepEqual([editing.answer.split('\n'), editing.pending.body], [['Priya Jain (9829044444) की जानकारी बदलूँ?', '- वज़न: 62', '- लक्ष्य: Muscle gain'],
       { name: 'Priya Jain', phone: '9829044444', gender: '', age: '', weight: 62, height: '', goal: 'Muscle gain', health: '', batch: '', notes: '' }]); // a bad number and what is no detail of a member are left out
-    assert.deepEqual([(await told({ do: 'edit', mobile: '9829044444', set: { goal: 'Weight loss' } })).pending, (await told({ do: 'new' })).start, (await told('{"do": pay')).answer.startsWith('माफ़ कीजिए'), (await told({ do: 'delete', mobile: '9829044444' })).pending],
-      [undefined, 'register', true, undefined]);
+    assert.deepEqual([(await told({ do: 'edit', mobile: '9829044444', set: { goal: 'Weight loss' } })).pending, (await told({ do: 'new' })).start, (await told('{"do": pay')).answer.startsWith('माफ़ कीजिए'), (await told({ do: 'burn', mobile: '9829044444' })).pending, (await told({ do: 'delete', mobile: '9829044444' })).pending.do],
+      [undefined, 'register', true, undefined, 'delete']);
     // 'Shall I?' is answered without the AI: a yes sends it, a no drops it, anything else is a new message. So are the
     // plain orders: money taken and a renewal, with 'which one?' and 'for how many months?' asked on the way
     global.fetch = () => { throw new Error('the AI is not asked'); };
@@ -319,6 +325,11 @@ async function apiChecks() {
     const lower = await dues();
     await ok(gym('DELETE', `/api/payments/${(await ok(gym('GET', '/api/data'))).payments.find((p) => p.amount === 700 && p.mode === 'UPI').id}`));
     assert.deepEqual([before, lower, await dues(), (await ok(gym('POST', '/api/chat', { question: 'हाँ, कर दो', confirming: true }))).run], ['₹3,700', '₹3,000', '₹3,700', true]);
+    // Open pages follow a number that moves with every change to their own gym, and with nothing else
+    const version = async (as) => (await ok(as('GET', '/api/version'))).n, [mine, theirs, everyones] = [await version(gym), await version(other), await version(owner)];
+    await ok(gym('POST', '/api/chat', { question: 'rahul ka hisaab', quick: true }));
+    await ok(gym('POST', '/api/reminders/sent', { memberId: rahulId, type: 'fees' }));
+    assert.deepEqual([await version(gym) - mine, await version(other) - theirs, await version(owner) - everyones, await status(nobody('GET', '/api/version'))], [1, 0, 1, 401]);
     // 'They have all paid': all that each ticked member owes is taken at once. Another gym's member is not touched
     assert.deepEqual([await ok(other('POST', '/api/members/pay', { ids: [rahulId] })), await status(gym('POST', '/api/members/pay', { ids: [] })), await ok(gym('POST', '/api/members/pay', { ids: [rahulId], mode: 'UPI' })), await dues(),
       await ok(gym('POST', '/api/members/pay', { ids: [rahulId] }))], [{ paid: 0, total: 0 }, 400, { paid: 1, total: 3700 }, '₹0', { paid: 0, total: 0 }]);

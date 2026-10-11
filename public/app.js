@@ -177,12 +177,24 @@ const go = (hash) => { if (location.hash === hash) route(); else location.hash =
 // afresh and draws the page again when something differs, unless a box is open or something is being typed.
 // ponytail: seen at the next page change, not the same second; push it from the server (SSE) if that is ever wanted.
 async function recheck() {
-  if (!S || !S.gym || dlg.open) return;
+  if (!S || !S.gym || !calm()) return; // a page that is busy is left alone, and asked about again in a few seconds
   const was = JSON.stringify(S), data = await ask('GET', '/api/data').catch(() => null);
-  if (!data || !S || JSON.stringify(data) === was || JSON.stringify(S) !== was) return;
+  if (!data || !S || JSON.stringify(data) === was || JSON.stringify(S) !== was || !calm()) return;
   setData(data);
-  if (!dlg.open && !main.querySelector('input:focus, textarea:focus, select:focus') && current !== 'import') route();
+  route();
 }
+// Nothing is open or half done on this page, so it may be drawn again.
+const calm = () => !dlg.open && !picked.size && !main.querySelector('input:focus, textarea:focus, select:focus') && current !== 'import';
+// Every few seconds the page asks the server one small thing: has anything changed since I last looked? When it has,
+// on another phone or computer, on any page or through the assistant, this page reads it and shows it.
+// What was read carries the number it was read at (S.version), so nothing that happens in between is missed.
+setInterval(async () => {
+  if (!S || document.hidden) return;
+  const now = await ask('GET', '/api/version').catch(() => null);
+  if (!now || !S || now.n === S.version) return;
+  if (S.gym) recheck();
+  else if (current === 'accounts' && calm()) { S.version = now.n; loadAccounts().catch(() => {}); }
+}, 8000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) recheck(); });
 window.addEventListener('hashchange', () => {
   if (dlg.open) dlg.close();
@@ -742,6 +754,12 @@ async function carryOut({ do: what, id, body }) {
     const all = await api('POST', '/api/members/pay', body);
     await refresh();
     return `${all.paid} मेंबर की फीस जमा हो गई, कुल ${G.money(all.total)}।`;
+  }
+  if (what === 'delete') {
+    const gone = byId(S.members, id) || { name: 'मेंबर' };
+    await api('DELETE', `/api/members/${id}`);
+    await refresh();
+    return `${gone.name} को हटा दिया। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।`;
   }
   const m = await api(what === 'edit' ? 'PUT' : 'POST', `/api/members/${id}${what === 'edit' ? '' : `/${what}`}`, body);
   await refresh();
