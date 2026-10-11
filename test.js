@@ -57,6 +57,23 @@ async function cacheChecks() {
   assert.equal(await cache.through('f', 60, async () => 'up again'), 'up again');
 }
 
+// When several members share the name asked about, the assistant picks nobody: it asks which one and lists their mobile
+// numbers. The owner answers with the number, its last digits, or the rest of the name, and gets that member.
+async function talkChecks() {
+  const ai = require('./lib/ai'), today = '2026-10-11';
+  const member = (id, name, phone, owed) => ({ id, name, phone, months: 1, start: '2026-10-01', end: '2026-10-31', fee: 1000, paid: 1000 - owed, joinedAt: '2026-10-01' });
+  const db = { gym: { name: 'Fit Zone' }, payments: [], members: [member('a', 'Rahul Sharma', '9829011111', 0), member('b', 'Rahul Verma', '9829022222', 400), member('c', 'Rahul Sharma', '9829033333', 1000), member('d', 'Priya Jain', '9829044444', 0)] };
+  const talk = [];
+  const say = async (question) => { const r = await ai.chat({ question, db, today, quick: true, history: talk.slice(-6) }); talk.push({ who: 'me', text: question }, { who: 'ai', text: r.answer }); return r.answer.split('\n'); };
+  const fresh = (question) => { talk.length = 0; return say(question); };
+  assert.deepEqual(await fresh('rahul ki fees kitni baaki hai'), ['इस नाम के 3 मेंबर हैं। किसकी बात कर रहे हैं? मोबाइल नंबर बताइए।', '- Rahul Sharma: 9829011111', '- Rahul Verma: 9829022222', '- Rahul Sharma: 9829033333']);
+  assert.deepEqual([(await say('98290 33333'))[2], (await say('kab khatam hogi?'))[2]], ['- मोबाइल: 9829033333', '- मोबाइल: 9829033333']); // the number, and then a follow-up about the same one
+  assert.deepEqual([(await fresh('rahul sharma ka hisaab')).length, (await say('3333'))[2]], [3, '- मोबाइल: 9829033333']);                        // two share the whole name; the last digits settle it
+  assert.deepEqual([(await fresh('rahul ka hisaab')).length, (await say('verma'))[2]], [4, '- मोबाइल: 9829022222']);                                // the rest of the name settles it
+  assert.deepEqual([(await fresh('rahul verma ki membership'))[2], (await fresh('priya ki fees kitni baaki hai'))[2]], ['- मोबाइल: 9829022222', '- मोबाइल: 9829044444']); // a name that fits one member asks nothing
+  assert.deepEqual([(await fresh('kiski fees baaki hai'))[0], (await say('is mahine kitna aaya'))[0]], ['2 मेंबर की फीस बाकी है, कुल ₹1,400।', 'इस महीने ₹0 जमा हुए, 0 भुगतान में।']);
+}
+
 async function apiChecks() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gymsaathi-test-'));
   // Set before the server loads .env: what is already set wins, so nothing in .env can steer the test
@@ -540,6 +557,8 @@ async function apiChecks() {
   console.log('ok  dates, fees and reminders');
   await cacheChecks();
   console.log('ok  cache');
+  await talkChecks();
+  console.log('ok  the assistant asks which member is meant');
   await apiChecks();
   console.log(`ok  api (${MONGO ? 'MongoDB' : 'files'})`);
   if (MONGO) process.exit(0); // the database connection would keep the process open
