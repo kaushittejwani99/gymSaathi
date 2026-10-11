@@ -72,6 +72,25 @@ async function talkChecks() {
   assert.deepEqual([(await fresh('rahul ka hisaab')).length, (await say('verma'))[2]], [4, '- मोबाइल: 9829022222']);                                // the rest of the name settles it
   assert.deepEqual([(await fresh('rahul verma ki membership'))[2], (await fresh('priya ki fees kitni baaki hai'))[2]], ['- मोबाइल: 9829022222', '- मोबाइल: 9829044444']); // a name that fits one member asks nothing
   assert.deepEqual([(await fresh('kiski fees baaki hai'))[0], (await say('is mahine kitna aaya'))[0]], ['2 मेंबर की फीस बाकी है, कुल ₹1,400।', 'इस महीने ₹0 जमा हुए, 0 भुगतान में।']);
+  // A question may ask for a detail of the member: the sentence gives it, or says that it is not written down
+  db.members[3].goal = 'Weight loss';
+  assert.deepEqual([(await fresh('priya ka goal kya h?'))[0], (await fresh('priya ki umar kitni hai'))[0], (await fresh('priya ka goal kya h?')).length], ['Priya Jain का लक्ष्य: Weight loss।', 'Priya Jain की उम्र: लिखा नहीं है।', 7]);
+  // With the AI on, a question about a member carries that member's whole record, however many members the gym has and
+  // wherever in the list the member is. A question about the whole gym carries every member in short
+  const big = { gym: { name: 'Big Gym' }, payments: [], members: [...Array.from({ length: 600 }, (x, i) => member(`m${i}`, `Member${i} Test`, `97${10000000 + i}`, 0)), { ...member('z', 'Dinesh Kumar', '9829055555', 2700), goal: 'Muscle gain' }] };
+  const realFetch = global.fetch;
+  let input = '';
+  global.fetch = async (url, init) => { input = JSON.parse(init.body).input; return Response.json({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: 'ठीक है।' }] }] }); };
+  process.env.GEMINI_API_KEY = 'test-key';
+  try {
+    const one = await ai.chat({ question: 'dinesh ka goal kya h?', db: big, today });
+    assert.deepEqual([one.mode, input.startsWith('The question is about this member (the gym has 601 in all):\nDinesh Kumar | 9829055555'), input.includes('goal: Muscle gain | health: not written'), input.includes('Member0 Test')], ['ai', true, true, false]);
+    await ai.chat({ question: 'sabse zyada fees kiski baaki hai?', db: big, today });
+    assert.deepEqual([input.startsWith('Members (601):\nMember0 Test'), input.includes('Dinesh Kumar | 9829055555'), input.includes('goal:')], [true, true, false]);
+  } finally {
+    process.env.GEMINI_API_KEY = '';
+    global.fetch = realFetch;
+  }
 }
 
 async function apiChecks() {
