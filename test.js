@@ -224,6 +224,16 @@ async function apiChecks() {
       global.fetch = stubbed;
       assert.deepEqual([answered.mode, answered.answer, sent.includes('Earlier in this talk:\nOwner: old 1\n'), sent.includes('old 0'), sent.includes('Owner: Rahul ki membership kab shuru hui?\nAssistant: Rahul Sharma की मेंबरशिप आज शुरू हुई।\n\nQuestion: kab khatam hogi?'),
         /from \d{1,2} [A-Z][a-z]{2} \d{4} to \d{1,2} [A-Z][a-z]{2} \d{4}/.test(sent), /\d{4}-\d\d-\d\d/.test(sent)], ['ai', 'Rahul Sharma: 9 Jan 2027 को।', true, false, true, true, false]);
+      // Every answer has one shape, in Hindi: a sentence, then lines that begin with '- '. The AI is told so, and any
+      // markdown it writes all the same is taken out. A bare mobile number or name is answered without the AI at all
+      let rules = '', calls = 0;
+      global.fetch = (url, init) => { if (String(url).startsWith('https://generativelanguage.googleapis.com/')) { calls++; rules = JSON.parse(init.body).system_instruction; } return stubbed(url, init); };
+      said = '**Rahul Sharma** की फीस बाकी है।\n\n\n\n* नाम: Rahul Sharma\n• बाकी: ₹100';
+      const shaped = await ok(gym('POST', '/api/chat', { question: 'rahul ka hisaab batao' }));
+      const bare = await ok(gym('POST', '/api/chat', { question: ' 98290 11111 ' })), byName = await ok(gym('POST', '/api/chat', { question: 'rahul sharma?' }));
+      global.fetch = stubbed;
+      assert.deepEqual([shaped.answer, calls, rules.includes('Devanagari') && rules.includes('- बाकी: ₹<due>') && rules.includes('no asterisks'), bare.mode, byName.mode, bare.answer === byName.answer,
+        bare.answer.split('\n').slice(1).map((line) => line.split(':')[0])], ['Rahul Sharma की फीस बाकी है।\n\n- नाम: Rahul Sharma\n- बाकी: ₹100', 1, true, 'local', 'local', true, ['- नाम', '- मोबाइल', '- मेंबरशिप', '- स्थिति', '- फीस', '- बाकी']]);
     } finally {
       process.env.GEMINI_API_KEY = '';
       global.fetch = realFetch;

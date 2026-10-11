@@ -621,8 +621,13 @@ function listen() {
   });
 }
 // After the assistant has spoken it listens for the answer by itself, so a registration needs no button between questions.
+// Each new thing the owner says or sends starts a new turn. Whatever the assistant was still saying for an older turn is
+// cut short, and that older turn no longer opens the microphone when it ends.
+let turn = 0;
+// Runs a part of the talk without making its button wait for the speaking to end: a new message can always be sent.
+const aside = (work) => { Promise.resolve(work).catch((e) => { console.error(e); toast(e.message, true); }); };
 async function listenNext() {
-  if (!Speech || current !== 'bolo') return;
+  if (!Speech || current !== 'bolo' || hearing) return;
   try { await heard(await listen()); } catch (e) {
     if (e.message === 'not-allowed') toast('Allow the microphone for this site, then press the mic.', true);
   }
@@ -634,6 +639,7 @@ async function says(text, more) {
 }
 
 async function regTurn(said) {
+  const mine = ++turn;
   thinking = true;
   renderTalk();
   try {
@@ -642,7 +648,7 @@ async function regTurn(said) {
     Object.assign(reg, { form: r.form, asked: r.next, tries: r.tries, done: r.done, fee: r.fee });
     thinking = false;
     await says(r.say);
-    if (!r.done) listenNext();
+    if (!r.done && mine === turn) listenNext();
   } finally {
     thinking = false;
     renderTalk();
@@ -653,7 +659,7 @@ function greet() {
   stopVoice();
   reg = null;
   talk = [];
-  return says('नमस्ते! मैं आपका जिम साथी असिस्टेंट हूँ। मैं आपकी क्या मदद कर सकता हूँ? नया मेंबर जोड़ना हो या कुछ पूछना हो, बस बोलिए।', { hello: true }).then(listenNext);
+  return says('नमस्ते! मैं आपका जिम साथी असिस्टेंट हूँ। मैं आपकी क्या मदद कर सकता हूँ? नया मेंबर जोड़ना हो या कुछ पूछना हो, बस बोलिए।', { hello: true }).then(((mine) => () => { if (mine === turn) listenNext(); })(++turn));
 }
 const ASKS = ['नया मेंबर जोड़ो', 'किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'];
 const askChips = () => ASKS.map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('');
@@ -689,6 +695,7 @@ function startReg() {
 async function heard(text) {
   text = text.trim();
   if (!text || thinking) return undefined;
+  turn++;
   const box = $('#boloInput');
   if (box) box.value = '';
   talk.push({ who: 'me', text });
@@ -755,7 +762,7 @@ views.bolo = (id, q) => {
 };
 
 Object.assign(actions, {
-  'reg-start'() { stopVoice(); talk = []; return startReg(); },
+  'reg-start'() { stopVoice(); talk = []; aside(startReg()); },
   'reg-cancel'() { stopVoice(); reg = null; talk.push({ who: 'ai', text: 'ठीक है, रद्द कर दिया।' }); renderTalk(); },
   'reg-edit'() { openDialog(dialogForm('New member', 'member-save', '', memberForm({ ...reg.form, fee: reg.fee }, true), 'Save member')); },
   async 'reg-save'() {
@@ -766,11 +773,12 @@ Object.assign(actions, {
   },
   'bolo-mic'() {
     if (hearing) return hearing.stop();
-    if (window.speechSynthesis) speechSynthesis.cancel();
-    return listenNext();
+    if (window.speechSynthesis) speechSynthesis.cancel(); // pressing the mic while it speaks: it stops and listens
+    turn++;
+    return aside(listenNext());
   },
-  'bolo-send'(form) { stopVoice(); return heard(form.said.value); },
-  'bolo-ask'(el) { return heard(el.textContent); },
+  'bolo-send'(form) { stopVoice(); aside(heard(form.said.value)); },
+  'bolo-ask'(el) { stopVoice(); aside(heard(el.textContent)); },
 });
 
 // ---- a backup on this computer, every seven days
