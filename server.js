@@ -412,7 +412,7 @@ const gymRoutes = {
   // The sample members that 'Load sample members' made, all at once.
   'DELETE /api/sample': write(async ({ gymId }) => {
     const sample = (await db.find('customers', { gymId })).filter((c) => live(c) && isSample(c));
-    for (const c of sample) await purgeMember(gymId, c._id); // nothing worth bringing back
+    await Promise.all(sample.map((c) => purgeMember(gymId, c._id))); // all together, and for good: nothing here is worth bringing back
     return { removed: sample.length };
   }),
   // A payment typed in wrongly is corrected: its amount, how it was paid, its date. Never to more than was owed.
@@ -523,12 +523,17 @@ const gymRoutes = {
     const today = G.todayISO(), d = account.details;
     await db.update('gyms', { _id: gymId }, { details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
       price1: d.price1 || 1000, price3: d.price3 || 2700, price12: d.price12 || 9000, ptPrice: d.ptPrice || 2000, dietPrice: d.dietPrice || 500 } });
+    // Written in three goes, one for each kind of record, not one member at a time: each go is a trip to the database.
+    const people = [], periods = [], payments = [];
     for (const [name, phone, months, ago, fee, paid] of SAMPLE) {
       const start = G.addDays(today, ago), id = newId(), membershipId = newId();
-      await db.insert('memberships', { _id: membershipId, gymId, customerId: id, months, start, end: G.endOf(start, months), fee, pt: fee === 3000, diet: false, createdAt: stamp() });
-      await db.insert('customers', { _id: id, gymId, name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', notes: '', joinedAt: start, sample: true });
-      await pay(gymId, id, name, membershipId, paid, 'Cash', start);
+      periods.push({ _id: membershipId, gymId, customerId: id, months, start, end: G.endOf(start, months), fee, pt: fee === 3000, diet: false, createdAt: stamp() });
+      people.push({ _id: id, gymId, name, phone, gender: '', age: '', weight: '', height: '', goal: '', health: '', batch: '', notes: '', joinedAt: start, sample: true });
+      if (paid > 0) payments.push({ _id: newId(), gymId, customerId: id, membershipId, name, amount: paid, mode: 'Cash', date: start, createdAt: stamp() });
     }
+    await db.insert('memberships', periods);
+    await db.insert('customers', people);
+    await db.insert('transactions', payments);
   }),
 };
 
