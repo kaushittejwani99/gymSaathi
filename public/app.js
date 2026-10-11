@@ -621,6 +621,7 @@ async function regTurn(said) {
   renderTalk();
   try {
     const r = await api('POST', '/api/register/turn', { form: reg.form, asked: reg.asked, said, tries: reg.tries });
+    if (r.setup) { reg = null; thinking = false; return await says(r.say, { settings: true }); } // the gym has no prices yet
     Object.assign(reg, { form: r.form, asked: r.next, tries: r.tries, done: r.done, fee: r.fee });
     thinking = false;
     await says(r.say);
@@ -673,7 +674,8 @@ function renderTalk() {
   const log = $('#talk');
   if (!log) return;
   log.innerHTML = (talk.length ? talk.map((t) => { const m = t.welcome && byId(S.members, t.welcome); return `<div class="msg ${t.who === 'me' ? 'user' : ''}">${esc(t.text)}
-      ${m ? `<div class="msg-meta">${waBtn(m, 'welcome', 'Send welcome on WhatsApp', 'primary')}<a class="btn secondary" href="#/members/${esc(m.id)}">Open member</a></div>` : ''}</div>`; }).join('')
+      ${m ? `<div class="msg-meta">${waBtn(m, 'welcome', 'Send welcome on WhatsApp', 'primary')}<a class="btn secondary" href="#/members/${esc(m.id)}">Open member</a></div>` : ''}
+      ${t.settings ? '<div class="msg-meta"><a class="btn primary" href="#/settings">Fill in the gym prices</a></div>' : ''}</div>`; }).join('')
     : `<p class="muted">Press <strong>New member</strong> and answer the questions aloud, or ask about your gym:</p>
        ${['किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'].map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('')}`)
     + (reg && reg.done ? regCard() : '') + (thinking ? '<div class="msg typing" aria-label="Thinking"><i></i><i></i><i></i></div>' : '');
@@ -833,8 +835,8 @@ const gymDetails = (g, must = '') => `
   ${field('Address', input('address', g.address, 'maxlength="300"'), 'span2')}
   ${field('Timings', input('timings', g.timings, 'maxlength="150" placeholder="सुबह 5 से 10, शाम 4 से 10"'), 'span2')}
   ${field('Amenities', input('amenities', g.amenities, 'maxlength="400" placeholder="कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर"'), 'span2')}`;
-const gymPrices = (g) => [['price1', '1 month'], ['price3', '3 months'], ['price6', '6 months'], ['price12', '1 year'], ['ptPrice', 'Personal trainer, per month'], ['dietPrice', 'Diet plan, per month']]
-  .map(([name, label]) => field(label, input(name, g[name] || '', NUM))).join('');
+const gymPrices = (g, must = '') => [['price1', '1 month'], ['price3', '3 months'], ['price6', '6 months'], ['price12', '1 year'], ['ptPrice', 'Personal trainer, per month'], ['dietPrice', 'Diet plan, per month']]
+  .map(([name, label]) => field(label, input(name, g[name] || '', name === 'price1' ? `${NUM} ${must}` : NUM))).join('');
 const PRICE_HINT = 'Leave 3, 6 or 12 months empty to charge the monthly price times the months.';
 
 views.settings = () => {
@@ -920,7 +922,7 @@ views.accounts = () => {
 Object.assign(actions, {
   'account-new'() {
     openDialog(dialogForm('Add gym', 'account-save', '', `<h3 class="form-part">The gym and its owner</h3><div class="grid">${gymDetails({}, 'required')}</div>
-      <h3 class="form-part">Prices</h3><p class="hint">${PRICE_HINT}</p><div class="grid three">${gymPrices({})}</div>
+      <h3 class="form-part">Prices</h3><p class="hint">${PRICE_HINT}</p><div class="grid three">${gymPrices({}, 'required')}</div>
       <h3 class="form-part">Login for the gym</h3><div class="grid">${field('Username', input('email', '', 'required maxlength="100" autocapitalize="none" spellcheck="false" autocomplete="off"'), 'span2')}
       ${passwordField('Password (at least 8 characters)', 'password', 'new-password')}</div>`, 'Create gym'));
   },

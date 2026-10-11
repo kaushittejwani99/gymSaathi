@@ -92,6 +92,10 @@ async function apiChecks() {
       await status(owner('POST', '/api/admin/gyms', { ...fitZone, owner: '', email: 'third.gym', password: 'first-password' })), await status(owner('POST', '/api/admin/gyms', { ...fitZone, phone: '123', email: 'third.gym', password: 'first-password' })),
       await status(owner('POST', '/api/admin/gyms', { ...fitZone, name: '', email: 'third.gym', password: 'first-password' }))], [409, 409, 400, 400, 400]);
     assert.deepEqual([(await listed('fit.zone')).owner, (await listed('fit.zone')).phone, await listed('third.gym')], ['Vikram', '9829000001', undefined]);
+    // The price for a month is needed too. A gym that has none (made before this rule) is told to fill it in, and no fee of nought is quoted
+    assert.equal(await status(owner('POST', '/api/admin/gyms', { ...fitZone, price1: 0, email: 'third.gym', password: 'first-password' })), 400);
+    const noPrice = await require('./lib/ai').turn({ gym: { name: 'No Price Gym', price1: 0 }, form: {}, asked: '', said: '' });
+    assert.deepEqual([noPrice.setup, noPrice.done, noPrice.next, noPrice.say.includes('फीस भर दीजिए'), noPrice.say.includes('0 रुपये')], [true, false, null, true, false]);
 
     // A gym's free month starts at its first sign-in, to the minute; signing in again does not move it
     assert.deepEqual([(await listed('fit.zone')).firstLoginAt, (await listed('fit.zone')).validTill], [null, null]);

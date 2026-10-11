@@ -556,6 +556,7 @@ const adminRoutes = {
   'POST /api/admin/gyms': async ({ body }) => {
     // The gym is handed over filled in: who owns it and how to reach them are needed, the rest may follow in its Settings.
     const details = { ...gymFields(body), owner: required(body.owner, "The owner's name", 80), phone: phoneOf(body.phone) };
+    if (!details.price1) fail(400, 'The price for 1 month is needed: the assistant works every fee out from it.');
     const made = await createGym(loginName(body.email), newPassword(body.password), details);
     return made ? { id: made._id } : fail(409, 'That username is already taken.');
   },
