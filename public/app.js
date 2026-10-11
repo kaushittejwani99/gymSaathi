@@ -159,7 +159,7 @@ function route() {
   $('#viewClose').hidden = !view;
   document.title = `${{ bolo: 'Assistant', import: 'Import old members' }[name] || cap(name)} - GymSaathi`;
   if (name === 'bolo') renderTalk();
-  weeklyBackup().catch((e) => toast(e.message, true));
+  weeklyBackup().then(hello).catch((e) => toast(e.message, true));
   return undefined;
 }
 const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
@@ -238,6 +238,7 @@ Object.assign(actions, {
   async login(form) {
     await api('POST', '/api/auth/login', fd(form));
     notice = '';
+    helloDue = true;
     await refresh();
     go('#/dashboard');
   },
@@ -631,6 +632,39 @@ async function regTurn(said) {
     renderTalk();
   }
 }
+// Opens the talk with a greeting, said aloud, and then listens: for 'naya member jodo' or for a question.
+function greet() {
+  stopVoice();
+  reg = null;
+  talk = [];
+  return says('नमस्ते! मैं आपका जिम साथी असिस्टेंट हूँ। मैं आपकी क्या मदद कर सकता हूँ? नया मेंबर जोड़ना हो या कुछ पूछना हो, बस बोलिए।', { hello: true }).then(listenNext);
+}
+const ASKS = ['नया मेंबर जोड़ो', 'किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'];
+const askChips = () => ASKS.map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('');
+
+// ---- the invitation to talk, shown to a gym when it signs in, and otherwise once a day
+
+let helloDue = false; // somebody has just signed in
+function hello() {
+  if (!S || !S.gym || view || dlg.open || S.exportDue || current === 'bolo') return;
+  const key = `gs-hello:${S.user.id}`;
+  let seen = '';
+  try { seen = localStorage.getItem(key) || ''; } catch { /* a private window keeps nothing: the invitation just shows */ }
+  if (!helloDue && seen === today()) return;
+  helloDue = false;
+  try { localStorage.setItem(key, today()); } catch { /* nothing to keep it in */ }
+  openDialog(`<div class="dialog-body hello">
+      <div class="hello-mic">${icon('mic')}</div>
+      <h2>Try the AI assistant</h2>
+      <p class="hello-hi">बोल कर काम कीजिए, टाइप नहीं</p>
+      <p class="muted">Add a member, see who owes fees, ask how much came in this month. Just say it, in Hindi or English.</p>
+      <div class="hello-asks">${ASKS.map((q) => `<span class="chip">${q}</span>`).join('')}</div>
+    </div>
+    <footer class="dialog-foot hello-foot"><button class="btn secondary" data-action="dialog-close">Not now</button>
+      <button class="btn primary" data-action="hello-go">${icon('mic')}Talk to the assistant</button></footer>`);
+}
+actions['hello-go'] = () => { dlg.close(); go('#/bolo?hi=1'); };
+
 function startReg() {
   reg = { form: {}, asked: null, tries: 0, done: false, fee: 0 };
   return regTurn('');
@@ -675,7 +709,7 @@ function renderTalk() {
   if (!log) return;
   log.innerHTML = (talk.length ? talk.map((t) => { const m = t.welcome && byId(S.members, t.welcome); return `<div class="msg ${t.who === 'me' ? 'user' : ''}">${esc(t.text)}
       ${m ? `<div class="msg-meta">${waBtn(m, 'welcome', 'Send welcome on WhatsApp', 'primary')}<a class="btn secondary" href="#/members/${esc(m.id)}">Open member</a></div>` : ''}
-      ${t.settings ? '<div class="msg-meta"><a class="btn primary" href="#/settings">Fill in the gym prices</a></div>' : ''}</div>`; }).join('')
+      ${t.settings ? '<div class="msg-meta"><a class="btn primary" href="#/settings">Fill in the gym prices</a></div>' : ''}${t.hello && talk.length === 1 ? `<div class="msg-meta">${askChips()}</div>` : ''}</div>`; }).join('')
     : `<p class="muted">Press <strong>New member</strong> and answer the questions aloud, or ask about your gym:</p>
        ${['किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'].map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('')}`)
     + (reg && reg.done ? regCard() : '') + (thinking ? '<div class="msg typing" aria-label="Thinking"><i></i><i></i><i></i></div>' : '');
@@ -688,7 +722,8 @@ function renderTalk() {
 
 views.bolo = (id, q) => {
   // Reached from a 'New member by voice' button: the questions start at once.
-  if (q.get('new') && !(reg && !reg.done)) setTimeout(() => { history.replaceState(null, '', '#/bolo'); startReg().catch((e) => toast(e.message, true)); });
+  if (q.get('hi')) setTimeout(() => { history.replaceState(null, '', '#/bolo'); greet().catch((e) => toast(e.message, true)); });
+  else if (q.get('new') && !(reg && !reg.done)) setTimeout(() => { history.replaceState(null, '', '#/bolo'); startReg().catch((e) => toast(e.message, true)); });
   return page('Assistant', `<button class="btn primary" data-action="reg-start">${icon('plus')}New member</button>`, `
     <div class="card talk-card"><div id="talk" class="chat-log" aria-live="polite"></div>
       <div class="card-body hint" id="boloState"></div>
