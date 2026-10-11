@@ -76,6 +76,12 @@ async function talkChecks() {
   assert.deepEqual([await fresh('priya ka hisaab'), await say('Ok.'), await say('theek hai ji'), await say('Thank you!'), await say('bye')].slice(1).map((a) => a.join('|')),
     ['ठीक है। और कुछ पूछना हो तो बताइए।', 'ठीक है। और कुछ पूछना हो तो बताइए।', 'आपका स्वागत है। और कुछ पूछना हो तो बताइए।', 'ठीक है, फिर मिलते हैं।']);
   assert.deepEqual([(await fresh('priya ka hisaab'))[2], (await say('ok'))[0], (await say('kab khatam hogi?'))[2]], ['- मोबाइल: 9829044444', 'ठीक है। और कुछ पूछना हो तो बताइए।', '- मोबाइल: 9829044444']);
+  // Said aloud, a name comes in Hindi script and is found by its sound; the everyday words of a question are not names
+  db.members.push(member('e', 'Kaushik Tejwani', '9116398862', 1000), member('f', 'Meena Das', '9829066666', 0), member('g', 'Tina Chaudhary', '9829077777', 0));
+  assert.deepEqual([(await fresh('कौशिक की फीस जमा हुई है कि नहीं हुई है'))[2], (await fresh('तेजवानी का हिसाब'))[2], (await fresh('प्रिया जैन की मेंबरशिप'))[2], (await fresh('मीना की फीस'))[2], (await fresh('टीना चौधरी'))[2]],
+    ['- मोबाइल: 9116398862', '- मोबाइल: 9116398862', '- मोबाइल: 9829044444', '- मोबाइल: 9829066666', '- मोबाइल: 9829077777']);
+  assert.deepEqual([(await fresh('इस महीने में कितना पैसा आया'))[0], (await fresh('किसकी फीस बाकी है'))[0].slice(0, 10), (await fresh('तीन दिन में दस मेंबर की मेंबरशिप खत्म होगी क्या'))[0].slice(0, 9)], ['इस महीने ₹0 जमा हुए, 0 भुगतान में।', '3 मेंबर की', '7 दिन में']);
+  db.members.length = 4;
   // A question may ask for a detail of the member: the sentence gives it, or says that it is not written down
   db.members[3].goal = 'Weight loss';
   assert.deepEqual([(await fresh('priya ka goal kya h?'))[0], (await fresh('priya ki umar kitni hai'))[0], (await fresh('priya ka goal kya h?')).length], ['Priya Jain का लक्ष्य: Weight loss।', 'Priya Jain की उम्र: लिखा नहीं है।', 7]);
@@ -91,6 +97,46 @@ async function talkChecks() {
     assert.deepEqual([one.mode, input.startsWith('The question is about this member (the gym has 601 in all):\nDinesh Kumar | 9829055555'), input.includes('goal: Muscle gain | health: not written'), input.includes('Member0 Test')], ['ai', true, true, false]);
     await ai.chat({ question: 'sabse zyada fees kiski baaki hai?', db: big, today });
     assert.deepEqual([input.startsWith('Members (601):\nMember0 Test'), input.includes('Dinesh Kumar | 9829055555'), input.includes('goal:')], [true, true, false]);
+    // A name said aloud reaches the app in Hindi script: by its sound it finds the member typed in English letters.
+    // A question that names nobody findable carries the whole list, and with it the member the talk was about
+    await ai.chat({ question: 'दिनेश का गोल क्या है?', db: big, today });
+    assert.equal(input.startsWith('The question is about this member (the gym has 601 in all):\nDinesh Kumar | 9829055555'), true);
+    await ai.chat({ question: 'वर्मा जी की फीस?', db: big, today, history: [{ who: 'me', text: 'dinesh ka hisaab' }, { who: 'ai', text: 'Dinesh Kumar...' }] });
+    assert.deepEqual([input.startsWith('Members (601):'), input.includes('Spoken of earlier in this talk, in full:\nDinesh Kumar | 9829055555')], [true, true]);
+
+    // An order is not carried out by the AI. What it understood comes back as JSON, is checked against the records and
+    // is put to the owner as a question; the screen sends it only after a yes
+    const gymDb = { ...db, gym: { name: 'Fit Zone', price1: 1000, price3: 2700 } };
+    const told = async (json, question = 'rahul verma ne paise diye') => { global.fetch = async () => Response.json({ steps: [{ type: 'model_output', content: [{ type: 'text', text: typeof json === 'string' ? json : JSON.stringify(json) }] }] }); return ai.chat({ question, db: gymDb, today }); };
+    const paying = await told({ do: 'pay', mobile: '9829022222', amount: 900, mode: 'UPI' });
+    assert.deepEqual([paying.answer, paying.pending], ['Rahul Verma के सिर्फ़ ₹400 बाकी हैं। Rahul Verma (9829022222) के ₹400 UPI से जमा करूँ?', { do: 'pay', id: 'b', body: { amount: 400, mode: 'UPI' } }]);
+    assert.deepEqual([(await told({ do: 'pay', mobile: '98290 33333' })).pending.body, (await told({ do: 'pay', mobile: '9829044444', amount: 500 })).pending, (await told({ do: 'pay', mobile: '9000000000', amount: 5 })).pending],
+      [{ amount: 1000, mode: 'Cash' }, undefined, undefined]); // no amount said is the whole due; nothing due and nobody found change nothing
+    const renewing = await told('```json\n{"do":"renew","mobile":"9829044444","months":3,"paid":5000}\n```');
+    assert.deepEqual([renewing.answer.split('\n'), renewing.pending], [['Priya Jain (9829044444) की मेंबरशिप 3 महीने के लिए रिन्यू करूँ?', '- 1 Nov 2026 से 31 Jan 2027', '- फीस: ₹2,700', '- अभी जमा: ₹2,700 (कैश में)'], { do: 'renew', id: 'd', body: { months: 3, paid: 2700, mode: 'Cash' } }]);
+    assert.deepEqual([(await told({ do: 'renew', mobile: '9829044444' })).answer, (await told({ do: 'renew', mobile: '9829044444', months: 99 })).pending], ['Priya Jain की मेंबरशिप कितने महीने के लिए रिन्यू करनी है?', undefined]);
+    const editing = await told({ do: 'edit', mobile: '9829044444', set: { goal: 'Muscle gain', weight: 62, phone: '12345', months: 12, fee: 0, gymId: 'x' } });
+    assert.deepEqual([editing.answer.split('\n'), editing.pending.body], [['Priya Jain (9829044444) की जानकारी बदलूँ?', '- वज़न: 62', '- लक्ष्य: Muscle gain'],
+      { name: 'Priya Jain', phone: '9829044444', gender: '', age: '', weight: 62, height: '', goal: 'Muscle gain', health: '', batch: '', notes: '' }]); // a bad number and what is no detail of a member are left out
+    assert.deepEqual([(await told({ do: 'edit', mobile: '9829044444', set: { goal: 'Weight loss' } })).pending, (await told({ do: 'new' })).start, (await told('{"do": pay')).answer.startsWith('माफ़ कीजिए'), (await told({ do: 'delete', mobile: '9829044444' })).pending],
+      [undefined, 'register', true, undefined]);
+    // 'Shall I?' is answered without the AI: a yes sends it, a no drops it, anything else is a new message. So are the
+    // plain orders: money taken and a renewal, with 'which one?' and 'for how many months?' asked on the way
+    global.fetch = () => { throw new Error('the AI is not asked'); };
+    const order = async (question, history = []) => { const r = await ai.chat({ question, db: gymDb, today, history }); return r.pending ? [r.pending.do, r.pending.id, ...Object.values(r.pending.body)] : r.answer.split('\n')[0]; };
+    assert.deepEqual([await order('rahul verma ne 300 diye'), await order('प्रिया जैन की मेंबरशिप 3 महीने के लिए रिन्यू कर दो'), await order('rahul verma ki fees jama kar do upi se'), await order('priya ko ek saal ke liye renew karo')],
+      [['pay', 'b', 300, 'Cash'], ['renew', 'd', 3, 0, 'Cash'], ['pay', 'b', 400, 'UPI'], ['renew', 'd', 12, 0, 'Cash']]);
+    const which = [{ who: 'me', text: 'rahul ki fees jama kar do' }, { who: 'ai', text: (await order('rahul ki fees jama kar do')) + '\n- Rahul Sharma: 9829011111\n- Rahul Verma: 9829022222\n- Rahul Sharma: 9829033333' }];
+    const months = [{ who: 'me', text: 'priya ki membership renew kar do' }, { who: 'ai', text: await order('priya ki membership renew kar do') }];
+    assert.deepEqual([which[1].text.split('\n')[0], await order('3333', which), months[1].text, await order('दो महीने', months), await order('फीस जमा कर दो', [{ who: 'me', text: 'rahul verma ka hisaab' }])],
+      ['इस नाम के 3 मेंबर हैं। किसकी बात कर रहे हैं? मोबाइल नंबर बताइए।', ['pay', 'c', 1000, 'Cash'], 'Priya Jain की मेंबरशिप कितने महीने के लिए रिन्यू करनी है?', ['renew', 'd', 2, 0, 'Cash'], ['pay', 'b', 400, 'Cash']]);
+    // A question is never an order, and neither is an order about nobody
+    process.env.GEMINI_API_KEY = '';
+    assert.deepEqual([(await order('rahul verma ki fees jama hui ya nahi')).slice(0, 11), (await order('kabir ne 500 diye')).slice(0, 3), (await order('priya ne kitne diye')).slice(0, 10)], ['Rahul Verma', 'कुल', 'Priya Jain']);
+    process.env.GEMINI_API_KEY = 'test-key';
+    const reply = async (question) => { const r = await ai.chat({ question, db: gymDb, today, confirming: true, quick: true }); return r.run || r.answer.split('\n')[0]; };
+    assert.deepEqual([await reply('हाँ, कर दो'), await reply('ok'), await reply('haan ji'), await reply('नहीं'), await reply('nahi rehne do'), await reply('priya ka hisaab')],
+      [true, true, true, 'ठीक है, नहीं किया।', 'ठीक है, नहीं किया।', 'Priya Jain की मेंबरशिप 31 Oct 2026 तक है, और कोई फीस बाकी नहीं है।']);
   } finally {
     process.env.GEMINI_API_KEY = '';
     global.fetch = realFetch;
@@ -240,6 +286,14 @@ async function apiChecks() {
       await status(gym('POST', '/api/chat', { question: 'kab khatam hogi?', quick: true, history: 'not a list' }))], [true, false, true, true, 200]);
     assert.equal((await ok(gym('POST', '/api/chat', { question: 'नया मेंबर जोड़ो' }))).start, 'register');
     assert.ok(!(await ok(other('POST', '/api/chat', { question: 'किसकी फीस बाकी है?', quick: true }))).answer.includes('Rahul'));
+    // What is changed on the screens is what the assistant reads the very next time, and a yes to its 'shall I?' comes
+    // back as the word to go ahead
+    const dues = async () => /बाकी: (₹[\d,]+)/.exec((await ok(gym('POST', '/api/chat', { question: 'rahul ka hisaab', quick: true }))).answer)[1];
+    const before = await dues(), rahulId = (await ok(gym('GET', '/api/data'))).members.find((m) => m.name === 'Rahul Sharma').id;
+    await ok(gym('POST', `/api/members/${rahulId}/pay`, { amount: 700, mode: 'UPI' }));
+    const lower = await dues();
+    await ok(gym('DELETE', `/api/payments/${(await ok(gym('GET', '/api/data'))).payments.find((p) => p.amount === 700 && p.mode === 'UPI').id}`));
+    assert.deepEqual([before, lower, await dues(), (await ok(gym('POST', '/api/chat', { question: 'हाँ, कर दो', confirming: true }))).run], ['₹3,700', '₹3,000', '₹3,700', true]);
 
     // With a Gemini key one spoken sentence can fill several answers. The call to Google is stubbed.
     const realFetch = global.fetch;

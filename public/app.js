@@ -173,11 +173,23 @@ function route() {
   return undefined;
 }
 const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
+// The same gym may be open on a phone and a computer. Each change of page, and each return to this tab, reads the gym
+// afresh and draws the page again when something differs, unless a box is open or something is being typed.
+// ponytail: seen at the next page change, not the same second; push it from the server (SSE) if that is ever wanted.
+async function recheck() {
+  if (!S || !S.gym || dlg.open) return;
+  const was = JSON.stringify(S), data = await ask('GET', '/api/data').catch(() => null);
+  if (!data || !S || JSON.stringify(data) === was || JSON.stringify(S) !== was) return;
+  setData(data);
+  if (!dlg.open && !main.querySelector('input:focus, textarea:focus, select:focus') && current !== 'import') route();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) recheck(); });
 window.addEventListener('hashchange', () => {
   if (dlg.open) dlg.close();
   if (!location.hash.startsWith('#/bolo')) stopVoice(); // the assistant stops talking when its page is left
   route();
   window.scrollTo(0, 0);
+  recheck();
 });
 
 // data-action fires on submit for a <form>, on change or input for a field, and on click for anything else.
@@ -695,23 +707,38 @@ function startReg() {
 async function heard(text) {
   text = text.trim();
   if (!text || thinking) return undefined;
-  turn++;
-  const box = $('#boloInput');
+  const mine = ++turn, box = $('#boloInput');
   if (box) box.value = '';
+  // A change the assistant has just asked leave for. It waits for this one message only: a yes carries it out.
+  const asked = (talk.at(-1) || {}).pending;
+  if (asked) delete talk.at(-1).pending;
   talk.push({ who: 'me', text });
   if (reg && !reg.done) return regTurn(text);
   thinking = true;
   renderTalk();
   try {
     // The last few turns go along, so 'kab khatam hogi?' after a question about Meena is understood to be about her.
-    const r = await api('POST', '/api/chat', { question: text, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) });
+    const r = await api('POST', '/api/chat', { question: text, confirming: !!asked, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) });
+    const done = r.run && asked ? await carryOut(asked) : '';
     thinking = false;
+    if (done) return await says(done);
     if (r.start === 'register') return startReg();
-    return says(r.answer);
+    await says(r.answer, r.pending && { pending: r.pending });
+    if (r.pending && mine === turn) listenNext(); // it asked 'shall I?' and now listens for the yes
+    return undefined;
   } finally {
     thinking = false;
     renderTalk();
   }
+}
+// Does what the owner said yes to, by the same requests as the buttons on the member's page, and reads the gym afresh
+// so that every page shows it. Returns what to say.
+async function carryOut({ do: what, id, body }) {
+  const m = await api(what === 'edit' ? 'PUT' : 'POST', `/api/members/${id}${what === 'edit' ? '' : `/${what}`}`, body);
+  await refresh();
+  const owed = G.due(m) ? `अब ${G.money(G.due(m))} बाकी हैं।` : 'अब कोई फीस बाकी नहीं है।';
+  return what === 'pay' ? `${m.name} के ${G.money(body.amount)} जमा हो गए। ${owed}`
+    : what === 'renew' ? `${m.name} की मेंबरशिप ${G.fmtDate(m.end)} तक रिन्यू हो गई। ${owed}` : `${m.name} की जानकारी बदल दी गई।`;
 }
 
 // The filled form, shown for one look before it is saved.
@@ -733,6 +760,7 @@ function renderTalk() {
   if (!log) return;
   log.innerHTML = (talk.length ? talk.map((t) => { const m = t.welcome && byId(S.members, t.welcome); return `<div class="msg ${t.who === 'me' ? 'user' : ''}">${esc(t.text)}
       ${m ? `<div class="msg-meta">${waBtn(m, 'welcome', 'Send welcome on WhatsApp', 'primary')}<a class="btn secondary" href="#/members/${esc(m.id)}">Open member</a></div>` : ''}
+      ${t.pending ? '<div class="msg-meta"><button class="btn primary" data-action="bolo-ask">हाँ, कर दो</button><button class="btn secondary" data-action="bolo-ask">नहीं</button></div>' : ''}
       ${t.settings ? '<div class="msg-meta"><a class="btn primary" href="#/settings">Fill in the gym prices</a></div>' : ''}${t.hello && talk.length === 1 ? `<div class="msg-meta">${askChips()}</div>` : ''}</div>`; }).join('')
     : `<p class="muted">Press <strong>New member</strong> and answer the questions aloud, or ask about your gym:</p>
        ${['किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'].map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('')}`)
