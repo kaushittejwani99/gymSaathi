@@ -79,6 +79,9 @@ function showPicked() {
   if (all) all.checked = boxes.length > 0 && boxes.every((box) => box.checked);
 }
 
+// Marks a button as off, with the reason on hover, while there is nothing for it to work on.
+const off = (nothing, why) => (nothing ? `disabled title="${why}"` : '');
+
 const STATUS = { active: ['paid', 'Active'], expiring: ['partial', 'Ending soon'], expired: ['overdue', 'Ended'] };
 const pill = (m) => { const [cls, label] = STATUS[G.statusOf(m, today())]; return `<span class="pill ${cls}">${label}</span>`; };
 const planName = (months) => (months === 12 ? '1 year' : `${months} month${months > 1 ? 's' : ''}`);
@@ -326,7 +329,7 @@ const memberBody = (form) => ({ ...fd(form), ...(form.pt && { pt: form.pt.checke
 views.members = (id) => {
   if (!id) {
     const tabs = S.deleted.length || F.tab === 'deleted' ? [...TABS, ['deleted', `Deleted (${S.deleted.length})`]] : TABS;
-    return page('Members', `<a class="btn secondary" href="#/import">Import old members</a><button class="btn secondary" data-action="export-members">Download Excel</button><button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
+    return page('Members', `<a class="btn secondary" href="#/import">Import old members</a><button class="btn secondary" data-action="export-members" ${off(!S.members.length, 'There is no member to download yet')}>Download Excel</button><button class="btn secondary" data-action="member-new">${icon('plus')}Add by typing</button><a class="btn primary" href="#/bolo?new=1">${icon('mic')}New member by voice</a>`, `
       <div class="card"><div class="tabs">${tabs.map(([v, label]) => `<button class="tab" data-action="tab" data-value="${v}" ${F.tab === v ? 'aria-pressed="true"' : ''}>${label}</button>`).join('')}</div>
         <div class="filters"><input type="search" data-action="search" value="${esc(F.q)}" placeholder="Search name or mobile number" aria-label="Search members"></div>
         ${bulkBar()}<div id="list">${memberRows()}</div></div>`);
@@ -555,7 +558,7 @@ function paymentRows() {
 }
 views.payments = () => {
   const owe = S.members.filter((m) => G.due(m) > 0), owed = owe.reduce((s, m) => s + G.due(m), 0);
-  return page('Payments', '<button class="btn secondary" data-action="export-payments">Download Excel</button>', `
+  return page('Payments', `<button class="btn secondary" data-action="export-payments" ${off(!S.payments.length, 'There is no payment to download yet')}>Download Excel</button>`, `
     <div class="card"><div class="filters"><label class="field"><span>Month (empty shows all)</span><input type="month" data-action="pay-month" value="${esc(F.month)}"></label></div>
       <div id="list">${paymentRows()}</div></div>
     <p class="hint">${owe.length ? `${money(owed)} is still pending from ${owe.length} member${owe.length > 1 ? 's' : ''}: <a href="#/members" data-action="tab" data-value="due">see who</a>.` : 'No fees are pending.'}</p>`);
@@ -817,7 +820,7 @@ Object.assign(actions, {
 });
 // The card on Settings (a gym) and on Accounts (the owner of the service).
 const backupCard = () => `<section class="card"><div class="card-head"><h2>Backup on this computer</h2><span class="hint">Asked for every ${S.exportDays} days</span></div>
-  <div class="card-body"><p class="muted">${esc(lastSaved())}</p><div class="actions"><button class="btn secondary" data-action="export-now">Save a backup now</button>
+  <div class="card-body"><p class="muted">${esc(lastSaved())}</p><div class="actions"><button class="btn secondary" data-action="export-now" ${off(S.user.admin ? !(accounts || []).length : !S.members.length, 'There is nothing to back up yet')}>Save a backup now</button>
     ${window.showDirectoryPicker ? '<button class="btn secondary" data-action="export-folder">Choose a folder for backups</button>' : ''}</div></div></section>`;
 
 // ---- settings
@@ -881,9 +884,10 @@ views.accounts = () => {
     loadAccounts().catch((err) => toast(err.message, true));
     return page('Accounts', '', `<div class="card">${empty('Loading gyms', 'One moment.')}</div>`);
   }
-  const add = `<button class="btn secondary" data-action="export-now">Download backup</button><button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
+  const addGym = `<button class="btn primary" data-action="account-new">${icon('plus')}Add gym</button>`;
+  const add = `<button class="btn secondary" data-action="export-now" ${off(!accounts.length, 'There is no gym to back up yet')}>Download backup</button>${addGym}`;
   const gone = accounts.filter((a) => a.deletedAt), shown = accounts.filter((a) => !a.deletedAt);
-  if (!accounts.length) return page('Accounts', add, `<div class="card">${empty('No gym yet', 'Add a gym and give it its username and password. Its free month starts when it first signs in.', add)}</div>`);
+  if (!accounts.length) return page('Accounts', add, `<div class="card">${empty('No gym yet', 'Add a gym and give it its username and password. Its free month starts when it first signs in.', addGym)}</div>`);
   // All gyms added up. A gym's own Members page only ever shows that one gym.
   const all = (key) => shown.reduce((n, g) => n + g[key], 0), card = (label, value, hint) => `<div class="card kpi"><div class="muted">${label}</div><div class="kpi-value">${value}</div><div class="hint">${hint}</div></div>`;
   return page('Accounts', add, `
