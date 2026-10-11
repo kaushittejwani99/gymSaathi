@@ -289,8 +289,20 @@ async function apiChecks() {
       'xl/worksheets/sheet1.xml': '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Ravi &amp; Sons</t></is></c><c r="C2"><v>46000</v></c></row><row r="3"/></sheetData></worksheet>' });
     assert.deepEqual(require('./lib/xlsx').rows(book), [['Name', 'Mobile', 'Start'], ['Ravi & Sons', '', '46000']]);
     assert.throws(() => require('./lib/xlsx').rows(Buffer.from('not a spreadsheet')));
-    // The AI turns a photo, a PDF or the lines of a spreadsheet into rows; the owner sees them before any is saved. Google is stubbed
-    assert.equal(await status(gym('POST', '/api/import/read', { name: 'old.csv', type: 'text/csv', data: Buffer.from('a,b\n1,2').toString('base64') })), 400); // no AI key set
+    // A sheet whose headings name the name and the mobile number is read as it stands, with no AI at all: dates day first
+    // or as Excel's day number, 'Quarterly' as three months, rupee signs and spaces dropped. Then each row is made fit
+    const b64 = (text) => Buffer.from(text).toString('base64'), read = (file) => gym('POST', '/api/import/read', file);
+    const clear = await ok(read({ name: 'old.csv', type: 'application/vnd.ms-excel', data: b64('\ufeffMember Name,Mobile,Joining Date,Months,Fee,Balance\r\n"Devi, Sita",98290 33333,15/01/2026,6,"₹5,000",500\r\nNo Number,,01/03/2026,Quarterly,,\r\n') }));
+    assert.deepEqual(clear.rows, [{ name: 'Devi, Sita', phone: '9829033333', start: '2026-01-15', months: 6, fee: 5000, due: 500, gender: '', age: '', batch: '', notes: '' },
+      { name: 'No Number', phone: '', start: '2026-03-01', months: 3, fee: '', due: 0, gender: '', age: '', batch: '', notes: '' }]);
+    assert.deepEqual((await ok(read({ name: 'Old Members.XLSX', type: '', data: book.toString('base64') }))).rows.map((r) => [r.name, r.phone, r.start, r.months]), [['Ravi & Sons', '', '2025-12-09', 1]]);
+    const five = await ok(read({ name: 'gym-500-members.csv', type: 'text/csv', data: b64(['Name,Phone,DOJ,Plan,Total,Due', ...Array.from({ length: 500 }, (x, i) => `Member ${i},9${700000000 + i},05-08-26,1 year,9000,${i % 2 ? 0 : 400}`)].join('\n')) }));
+    assert.deepEqual([five.rows.length, five.rows[499]], [500, { name: 'Member 499', phone: '9700000499', start: '2026-08-05', months: 12, fee: 9000, due: 0, gender: '', age: '', batch: '', notes: '' }]);
+    const heads = (text) => require('./lib/ai').byHeadings(text.split('\n').map((l) => l.split(',')));
+    assert.deepEqual([heads('Naam,Phone No,End Date,Start Date,Due Amount,Total Amount,Gender\nA,9829000001,04.11.2026,2026-08-05,100,900,F\nB,9829000002,,,,,male'), heads('A,B\n1,2'), heads('Name,Roll number\nX,5')],
+      [[{ name: 'A', phone: '9829000001', end: '2026-11-04', start: '2026-08-05', due: 100, fee: 900, gender: 'Female' }, { name: 'B', phone: '9829000002', gender: 'Male' }], null, null]);
+    // Headings that do not say enough, a photo and a PDF all need the AI, and say so when there is no key
+    assert.deepEqual([(await read({ name: 'old.csv', type: 'text/csv', data: b64('a,b\n1,2') }))[1].error.includes('no AI key'), await status(read({ name: 'page1.jpg', type: 'image/jpeg', data: b64('picture') }))], [true, 400]);
     const askedOf = [], realAsk = global.fetch;
     let answer = { rows: [{ name: 'Sita Devi', phone: '98290 33333', start: '2026-01-15', end: '2026-07-14', fee: 5000, due: 500, gender: 'Female', age: 31 },
       { name: 'No Number', start: '2026-03-01', months: 3 }, { name: 'Gita', phone: '9829033334', months: 99, start: '2031-01-01', fee: 'free' }, 'rubbish'] };
@@ -301,22 +313,21 @@ async function apiChecks() {
     };
     process.env.GEMINI_API_KEY = 'test-key';
     try {
-      const b64 = (text) => Buffer.from(text).toString('base64'), read = (file) => gym('POST', '/api/import/read', file);
-      // A CSV goes as lines of text under its headings. What comes back is made fit: the length worked out from the
-      // first and last day, a date in the future or a silly value dropped, a number that is no mobile number left empty
-      const csv = await ok(read({ name: 'old.csv', type: 'application/vnd.ms-excel', data: b64('﻿Name,Mobile,"Joined, on"\r\n"Devi, Sita",98290 33333,15/01/2026\r\n') }));
-      assert.equal(askedOf[0], 'Name | Mobile | Joined, on\nDevi, Sita | 98290 33333 | 15/01/2026');
+      // With a key the AI works the columns out from the lines of text. What comes back is made fit: the length worked out
+      // from the first and last day, a date in the future or a silly value dropped, a number that is no mobile number left empty
+      const csv = await ok(read({ name: 'old.csv', type: 'application/vnd.ms-excel', data: b64('\ufeffA,B,"C, d"\r\n"Devi, Sita",98290 33333,15/01/2026\r\n') }));
+      assert.equal(askedOf[0], 'A | B | C, d\nDevi, Sita | 98290 33333 | 15/01/2026');
       assert.deepEqual(csv.rows, [{ name: 'Sita Devi', phone: '9829033333', start: '2026-01-15', months: 6, fee: 5000, due: 500, gender: 'Female', age: 31, batch: '', notes: '' },
         { name: 'No Number', phone: '', start: '2026-03-01', months: 3, fee: '', due: 0, gender: '', age: '', batch: '', notes: '' },
         { name: 'Gita', phone: '9829033334', start: today, months: 1, fee: '', due: 0, gender: '', age: '', batch: '', notes: '' }]);
-      // An Excel file goes the same way; a photo and a PDF go as they are, beside the request
+      // A sheet with plain headings still needs no AI; a photo and a PDF go to it as they are
       await ok(read({ name: 'Old Members.XLSX', type: '', data: book.toString('base64') }));
       await ok(read({ name: 'page1.jpg', type: 'image/jpeg', data: b64('picture') }));
       await ok(read({ name: 'list.pdf', type: 'application/pdf', data: b64('%PDF') }));
-      assert.deepEqual([askedOf[1], askedOf[2][1], askedOf[3][1]], ['Name | Mobile | Start\nRavi & Sons |  | 46000', { type: 'image', data: b64('picture'), mime_type: 'image/jpeg' }, { type: 'document', data: b64('%PDF'), mime_type: 'application/pdf' }]);
+      assert.deepEqual([askedOf.length, askedOf[1][1], askedOf[2][1]], [3, { type: 'image', data: b64('picture'), mime_type: 'image/jpeg' }, { type: 'document', data: b64('%PDF'), mime_type: 'application/pdf' }]);
       // A long sheet goes sixty lines at a time, each time under its headings
-      await ok(read({ name: 'long.csv', type: 'text/csv', data: b64(['Name,Mobile', ...Array.from({ length: 130 }, (x, i) => `M${i},98290${String(40000 + i)}`)].join('\n')) }));
-      assert.deepEqual([askedOf.length, askedOf[4].split('\n').length, askedOf[6].split('\n').length, askedOf[6].split('\n')[0]], [7, 61, 11, 'Name | Mobile']);
+      await ok(read({ name: 'long.csv', type: 'text/csv', data: b64(['X,Y', ...Array.from({ length: 130 }, (x, i) => `M${i},98290${String(40000 + i)}`)].join('\n')) }));
+      assert.deepEqual([askedOf.length, askedOf[3].split('\n').length, askedOf[5].split('\n').length, askedOf[5].split('\n')[0]], [6, 61, 11, 'X | Y']);
       // What cannot be read says so in words for the owner; an answer from the AI that is no rows is an AI failure
       assert.deepEqual([(await read({ name: 'old.xls', type: '', data: b64('x') }))[1].error.includes('.xlsx'), await status(read({ name: 'a.xlsx', type: '', data: b64('broken') })), await status(read({ name: 'a.zip', type: '', data: b64('x') })),
         await status(read({ name: 'a.csv', type: '', data: '' })), await status(nobody('POST', '/api/import/read', {}))], [true, 400, 400, 400, 401]);

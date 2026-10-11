@@ -529,7 +529,6 @@ const gymRoutes = {
 
   // Old records, step one: the AI reads a photo, a PDF or a spreadsheet into rows. Nothing is saved, and the file is not kept.
   'POST /api/import/read': async ({ body, account, gymId }) => {
-    if (!ai.aiEnabled()) fail(400, 'Reading a file needs the AI, and no AI key is set. Add members by typing or by voice.');
     if (bucket(`import ${gymId}`, 10 * 60e3).n++ >= 20) fail(429, 'That is a lot of files at once. Wait ten minutes and go on.');
     const today = G.todayISO();
     let rows;
