@@ -710,6 +710,7 @@ async function start(port) {
   const server = http.createServer((req, res) => {
     Promise.resolve().then(() => {
       const url = new URL(req.url.split('#')[0], 'http://localhost');
+      if (url.pathname === '/ping') return send(res, 200, 'text/plain; charset=utf-8', 'ok'); // for an uptime pinger: keeps a free host awake
       return url.pathname.startsWith('/api/') ? api(req, res, url) : serveStatic(req, res, url.pathname);
     }).catch((e) => {
       const status = e && e.httpStatus;
