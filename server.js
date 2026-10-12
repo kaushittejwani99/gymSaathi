@@ -44,7 +44,7 @@ const sum = (list, key) => list.reduce((s, x) => s + x[key], 0);
 const live = (x) => !x.deletedAt; // a deleted member or gym stays in the store, marked, until it is cleared out
 const required = (v, label, max) => G.str(v, max) || fail(400, `${label} is required.`);
 const amount = (v, label, max = 1e7) => { const n = Number(v); return n >= 0 && n <= max ? Math.round(n) : fail(400, `${label} must be a number from 0 to ${max.toLocaleString('en-IN')}.`); };
-const phoneOf = (v) => { const d = G.lastTen(v); return /^[6-9]\d{9}$/.test(d) ? d : fail(400, 'The mobile number must have 10 digits.'); };
+const phoneOf = (v) => G.mobile(v) || fail(400, 'The mobile number must have 10 digits.');
 // The ids ticked on a list: each once, well-formed, and not more than a thousand.
 const tickedIds = (v) => { const ids = [...new Set(Array.isArray(v) ? v : [])].filter((id) => typeof id === 'string' && /^[a-f0-9]{16}$/.test(id)).slice(0, 1000); return ids.length ? ids : fail(400, 'Tick at least one.'); };
 const dateOf = (v, label) => (G.isDate(v) && v >= '2000-01-01' && v <= '2099-12-31' ? v : fail(400, `${label} must be a real date.`));
@@ -210,11 +210,12 @@ async function loadGym(account) {
     () => Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id }))));
   const shown = account.sample ? sample.records(account._id, G.todayISO()) : { customers: [], memberships: [], transactions: [] };
   const all = [...shown.customers, ...own[0]], periods = [...shown.memberships, ...own[1]], everyPaid = [...shown.transactions, ...own[2]];
-  const customers = all.filter(live), here = new Set(customers.map((c) => c._id));
+  const customers = all.filter(live), here = new Map(customers.map((c) => [c._id, c.name]));
   const paid = everyPaid.filter((t) => here.has(t.customerId)).sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
   return { gym: account.details, sent: account.sent, deleted: all.filter((c) => c.deletedAt).map((c) => ({ id: c._id, name: c.name, phone: c.phone, deletedAt: c.deletedAt })),
     members: customers.map((c) => memberOf(c, periods.filter((p) => p.customerId === c._id), paid.filter((t) => t.customerId === c._id))),
-    payments: paid.map((t) => ({ id: t._id, memberId: t.customerId, name: t.name, amount: t.amount, date: t.date, mode: t.mode })) };
+    // A payment carries the name its member has now: one renamed since is not listed under the old name.
+    payments: paid.map((t) => ({ id: t._id, memberId: t.customerId, name: here.get(t.customerId) || t.name, amount: t.amount, date: t.date, mode: t.mode })) };
 }
 // A deleted member is only marked: they leave every screen and every total, and can be brought back for a while.
 const dropMember = (gymId, id) => db.update('customers', { _id: id, gymId }, { deletedAt: stamp() });
@@ -323,17 +324,18 @@ function oldRow(r, gym, today) {
 // A trainer and a diet plan belong to the period bought. A renewal keeps the last choice unless told otherwise.
 const extras = (b, last = {}) => ({ pt: b.pt === undefined ? !!last.pt : b.pt === true, diet: b.diet === undefined ? !!last.diet : b.diet === true });
 // A membership period and its fee. The fee is the gym's own price unless the owner typed another.
-function period(b, gym, today, more) {
+// `owed` is what is still pending from earlier periods: a renewal may take that together with its own fee.
+function period(b, gym, today, more, owed = 0) {
   const months = G.okMonths(Number(b.months)) ? Number(b.months) : fail(400, 'The months must be a whole number from 1 to 36.');
   const start = b.start ? dateOf(b.start, 'The start date') : today;
   const fee = b.fee === undefined || b.fee === '' ? G.feeFor(gym, { months, ...more }) : amount(b.fee, 'The fee');
   const paid = amount(b.paid || 0, 'The amount paid');
-  if (paid > fee) fail(400, 'The amount paid is more than the fee.');
+  if (paid > fee + owed) fail(400, owed ? `The amount paid is more than the fee and what is pending (${G.money(fee + owed)}).` : 'The amount paid is more than the fee.');
   return { months, start, end: G.endOf(start, months), fee, paid };
 }
 // A period is only ever added, never changed: each one a member buys is its own document.
-async function addPeriod(gymId, customerId, name, body, gym, today, more) {
-  const { paid, ...plan } = period(body, gym, today, more), _id = newId();
+async function addPeriod(gymId, customerId, name, body, gym, today, more, owed) {
+  const { paid, ...plan } = period(body, gym, today, more, owed), _id = newId();
   await db.insert('memberships', { _id, gymId, customerId, ...plan, ...more, createdAt: stamp() });
   return () => pay(gymId, customerId, name, _id, paid, body.mode, today);
 }
@@ -465,13 +467,15 @@ const gymRoutes = {
     const today = G.todayISO(), who = await details(body, account), id = newId();
     // The period goes in before the member, so a failure in between leaves nothing half-made on the screens.
     const payNow = await addPeriod(gymId, id, who.name, body, account.details, today, extras(body));
-    await db.insert('customers', { _id: id, gymId, ...who, joinedAt: today });
+    await db.insert('customers', { _id: id, gymId, ...who, joinedAt: body.start && body.start < today ? body.start : today }); // an old member typed in today joined back then
     await payNow();
     return memberById(gymId, id);
   }),
   'PUT /api/members/:id': write(async ({ body, account, gymId, id }) => {
     await memberById(gymId, id);
-    await db.update('customers', { _id: id, gymId }, await details(body, account, id));
+    const who = await details(body, account, id);
+    if (body.notes === undefined) delete who.notes; // a form that has no box for the note does not wipe it
+    await db.update('customers', { _id: id, gymId }, who);
     return memberById(gymId, id);
   }),
   'DELETE /api/members/:id': write(async ({ gymId, id }) => {
@@ -529,6 +533,8 @@ const gymRoutes = {
     const m = await memberById(gymId, id);
     if (!m.history.length) fail(400, `This is the only membership ${m.name} has. Delete the member instead.`);
     if ((await db.find('transactions', { gymId, membershipId: m.membershipId })).length) fail(400, 'Money was taken with this renewal. Delete those payments first.');
+    // A payment on an earlier period may have been raised to cover this renewal's fee: with the renewal gone, more would be paid than is owed.
+    if (m.fee - m.paid < m.periodFee) fail(400, 'More has been paid than the earlier memberships cost. Change or delete a payment first.');
     await db.remove('memberships', { _id: m.membershipId, gymId });
     return memberById(gymId, id);
   }),
@@ -536,7 +542,10 @@ const gymRoutes = {
   'POST /api/members/:id/renew': write(async ({ body, account, gymId, id }) => {
     const m = await memberById(gymId, id), today = G.todayISO();
     // It starts the day after the old one ends, or today when that day has passed.
-    const payNow = await addPeriod(gymId, id, m.name, { ...body, start: body.start || (m.end >= today ? G.addDays(m.end, 1) : today) }, account.details, today, extras(body, m));
+    // The same renewal sent again (the answer was lost and the button pressed once more, or the yes said twice) is not a
+    // second one: a new period never starts on the day the running one started.
+    if (body.start && body.start === m.start) fail(409, `${m.name} already has a membership from ${G.fmtDate(m.start)}. If you have just renewed, it is saved.`);
+    const payNow = await addPeriod(gymId, id, m.name, { ...body, start: body.start || (m.end >= today ? G.addDays(m.end, 1) : today) }, account.details, today, extras(body, m), G.due(m));
     await payNow();
     return memberById(gymId, id);
   }),
@@ -581,7 +590,8 @@ const gymRoutes = {
       if (!e.readable) console.error('Reading old records failed:', e.status || '', e.message);
       fail(e.readable ? 400 : 502, e.readable ? e.message : 'The AI could not read this file just now. Try again, or try a clearer photo.');
     }
-    return { rows: rows.slice(0, 600).map((r) => oldRow(r, account.details, today)) };
+    // `more`: how many members the file holds beyond what one go takes, so that none is left out without a word
+    return { rows: rows.slice(0, 600).map((r) => oldRow(r, account.details, today)), more: Math.max(0, rows.length - 600) };
   },
   // Step two: the rows the owner looked through become members. Each has the period it was written with, taken as paid
   // except for what is marked pending. A row that cannot be a member is skipped and named, and the rest still go in.
@@ -614,9 +624,8 @@ const gymRoutes = {
   // prices where it has none so that the assistant can quote a fee.
   'POST /api/seed': write(async ({ account, gymId }) => {
     if ((await db.find('customers', { gymId }, ['deletedAt'])).some(live)) fail(400, 'Sample data is only for an empty gym.');
-    const d = account.details;
-    await saveGym(gymId, { sample: true, details: { ...d, owner: d.owner || 'Vikram Singh', timings: d.timings || 'सुबह 5 से 10, शाम 4 से 10', amenities: d.amenities || 'कार्डियो, वेट ट्रेनिंग, स्टीम, लॉकर',
-      price1: d.price1 || 1000, price3: d.price3 || 2700, price12: d.price12 || 9000, ptPrice: d.ptPrice || 2000, dietPrice: d.dietPrice || 500 } });
+    // Only the mark is set. The gym's own prices, timings and amenities are its own, and stay as they were typed.
+    await saveGym(gymId, { sample: true });
     return { added: sample.ROWS.length };
   }),
 };
@@ -668,18 +677,23 @@ const adminRoutes = {
   },
   // The days a gym can be put back to, newest first.
   'GET /api/admin/gyms/:id/backups': async ({ id }) => (await db.find('backups', { gymId: id })).map((b) => ({ date: b.date, at: b.at, members: b.members })).sort((a, b) => (a.at < b.at) - (a.at > b.at)),
-  // Puts a gym's members, periods and payments back to how a kept day had them. What it holds now is kept first, as
+  // Puts a gym's members, periods and payments back to how a kept day had them (its own details and prices stay). What it holds now is kept first, as
   // 'before restore', so a restore to the wrong day can itself be taken back. The login and the time left do not change.
   'POST /api/admin/gyms/:id/backups': async ({ body, id }) => {
     const g = (await gymById(id)) || fail(404, 'Gym not found.');
     const [b] = await db.find('backups', { _id: `${id}:${G.str(body.date, 20)}` });
     if (!b) fail(404, 'There is no backup of that day.');
     return write(async () => {
-      const then = unpacked(b.data);
-      if (b.date !== 'before restore') await snapshot(g, 'before restore');
+      const then = unpacked(b.data), LISTS = ['customers', 'memberships', 'transactions'], put = LISTS.map((name) => then[name].filter((d) => d.gymId === id));
+      // What the gym held before the first of several restores in a row is the copy worth keeping: a second restore
+      // made before anything else changed must not write the first restore's result over it.
+      const [last] = await db.find('backups', { _id: `${id}:before restore` }, ['into']);
+      const untouched = last && last.into === sha256(JSON.stringify(await Promise.all(LISTS.map((name) => db.find(name, { gymId: id })))));
+      if (b.date !== 'before restore' && !untouched) await snapshot(g, 'before restore');
       for (const name of ['transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
-      for (const name of ['customers', 'memberships', 'transactions']) await db.insert(name, then[name].filter((d) => d.gymId === id));
-      await saveGym(id, { details: then.details });
+      for (const [i, name] of LISTS.entries()) await db.insert(name, put[i]);
+      await db.update('backups', { _id: `${id}:before restore` }, { into: sha256(JSON.stringify(put)) });
+      forget(id); // the gym's name, owner, UPI and prices are not put back: they are as the gym has them now
       return { members: then.customers.filter(live).length };
     })({ gymId: id });
   },
@@ -723,16 +737,17 @@ async function api(req, res, url) {
     c.admin = !!who.admin;
     if (adminRoutes[key] && !c.admin) fail(403, 'Only the owner of this GymSaathi service can do that.');
     // The owner of the service opens any gym by naming it (?gym=<id>) and then sees and does what that gym can.
-    const view = c.admin && url.searchParams.get('gym');
+    const view = c.admin && !adminRoutes[key] && url.searchParams.get('gym');
     c.account = view ? (/^[a-f0-9]{16}$/.test(view) && await gymById(view)) || fail(404, 'Gym not found.') : who.account;
     if (gymRoutes[key] && !c.account) fail(400, 'Open a gym from the Accounts page first.');
     c.gymId = c.account && c.account._id;
   }
   c.body = req.method === 'GET' ? {} : await readJsonBody(req, key === 'POST /api/import/read' ? MAX_FILE : MAX_BODY);
   const changing = req.method !== 'GET' && !QUIET.has(key);
-  if (changing) mark(c.gymId);
+  const touched = c.gymId || (adminRoutes[key] && id) || undefined; // the gym this request changes, also when the seller does it
+  if (changing) mark(touched);
   const out = await route(c);
-  if (changing) { mark(c.gymId); for (const k of ['all', c.gymId]) if (k) changes.set(k, (changes.get(k) || 0) + 1); }
+  if (changing) { mark(touched); for (const k of ['all', touched]) if (k) changes.set(k, (changes.get(k) || 0) + 1); }
   if (!res.headersSent) json(res, 200, out || { ok: true });
 }
 

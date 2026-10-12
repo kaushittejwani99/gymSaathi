@@ -122,6 +122,9 @@ async function api(method, path, body) {
 async function ask(method, path, body) {
   // Every write carries a JSON content type: the server's CSRF defence rejects anything else.
   const init = method === 'GET' ? {} : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) };
+  // The assistant's two calls are given 40 seconds (one that reaches the AI may take most of that): a phone's dead
+  // connection can hang a request for minutes, and the talk takes nothing else while it waits.
+  if (AGAIN_OK.includes(path) && typeof AbortSignal.timeout === 'function') init.signal = AbortSignal.timeout(40000);
   const res = await fetch(view ? `${path}?gym=${view}` : path, init).catch(() => { throw new Error('Could not reach the server. Check your connection and try again.'); });
   const data = await res.json().catch(() => ({}));
   if (res.ok) return data;
@@ -154,7 +157,7 @@ async function load() { await refresh(); route(); }
 function route() {
   const [path, query] = location.hash.slice(1).split('?');
   const [name = '', id] = path.split('/').filter(Boolean);
-  document.body.className = S ? '' : 'auth';
+  document.body.classList.toggle('auth', !S); // only its own mark: the loading bar and the phone's open menu are not its to clear
   if (!S) {
     if (name !== 'login') return location.replace('#/login');
     main.innerHTML = authView();
@@ -168,9 +171,9 @@ function route() {
   picked.clear();
   main.innerHTML = views[name](id, new URLSearchParams(query)) || notFound;
   // In its last five days a gym is told on its dashboard that its time is ending, and what to pay.
-  const left = S.validTill ? Math.ceil((Date.parse(S.validTill) - Date.now()) / 864e5) : 99;
+  const left = S.validTill ? G.daysBetween(today(), G.todayISO(new Date(S.validTill))) : 99; // days of the calendar
   if (name === 'dashboard' && !view && left <= 5) {
-    main.insertAdjacentHTML('afterbegin', `<p class="pay-note">Your ${S.paying ? 'plan' : 'free trial'} ends ${left <= 1 ? 'today' : `in ${left} days`}, on ${esc(G.fmtDate(G.todayISO(new Date(S.validTill))))}.
+    main.insertAdjacentHTML('afterbegin', `<p class="pay-note">Your ${S.paying ? 'plan' : 'free trial'} ends ${left <= 0 ? 'today' : left === 1 ? 'tomorrow' : `in ${left} days`}, on ${esc(G.fmtDate(G.todayISO(new Date(S.validTill))))}.
       Pay ${money(S.price)} to keep GymSaathi running. ${esc(S.payNote)}</p>`);
   }
   for (const a of document.querySelectorAll('.sidebar nav a')) {
@@ -197,7 +200,8 @@ async function recheck() {
   route();
 }
 // Nothing is open or half done on this page, so it may be drawn again.
-const calm = () => !dlg.open && !picked.size && !main.querySelector('input:focus, textarea:focus, select:focus') && current !== 'import';
+// Settings may hold prices typed and not yet saved, and the assistant's box words not yet sent, with no cursor in them.
+const calm = () => !dlg.open && !picked.size && !main.querySelector('input:focus, textarea:focus, select:focus') && !['import', 'settings'].includes(current) && !($('#boloInput') || {}).value;
 // Every few seconds the page asks the server one small thing: has anything changed since I last looked? When it has,
 // on another phone or computer, on any page or through the assistant, this page reads it and shows it.
 // What was read carries the number it was read at (S.version), so nothing that happens in between is missed.
@@ -206,7 +210,10 @@ const calm = () => !dlg.open && !picked.size && !main.querySelector('input:focus
 // otherwise at the next change of page.
 const BUILD = (document.querySelector('meta[name="build"]') || {}).content || '';
 let outdated = false;
-const idle = () => calm() && !thinking && !hearing && !(reg && !reg.done) && !(window.speechSynthesis && speechSynthesis.speaking);
+// A reload loses what is only on this page: a registration (also one filled and waiting for Save), a 'shall I?' waiting
+// for its yes, rows read from a file and not saved, and the gym the owner of the service has opened.
+const holding = () => !!reg || !!(talk.at(-1) || {}).pending || !!(imp.rows && imp.rows.length) || !!view;
+const idle = () => calm() && !waiting && !thinking && !hearing && !holding() && !(window.speechSynthesis && speechSynthesis.speaking);
 setInterval(async () => {
   if (!S || document.hidden) return;
   const now = await ask('GET', '/api/version').catch(() => null);
@@ -218,7 +225,8 @@ setInterval(async () => {
 }, 8000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) recheck(); });
 window.addEventListener('hashchange', () => {
-  if (outdated) return location.reload(); // a newer app is on the server: this is the moment to take it
+  if (outdated && !holding()) return location.reload(); // a newer app is on the server: this is the moment to take it
+  if (current === 'import' && imp.rows) imp.rows = typedRows(); // rows mended or removed stay so (the old page is still on screen here)
   if (dlg.open) dlg.close();
   if (!location.hash.startsWith('#/bolo')) stopVoice(); // the assistant stops talking when its page is left
   route();
@@ -310,7 +318,7 @@ Object.assign(actions, {
     go('#/login');
   },
   async 'view-open'(el) { view = el.dataset.id; await refresh(); go(el.dataset.to || '#/dashboard'); },
-  async 'view-close'() { view = ''; await refresh(); go('#/accounts'); },
+  async 'view-close'() { view = ''; accounts = null; await refresh(); go('#/accounts'); }, // the list is read afresh: the gym may have changed, or gone
 });
 
 // ---- dashboard
@@ -379,6 +387,7 @@ const memberForm = (m, plan) => `<div class="grid">
   ${field('Goal', input('goal', m.goal, 'maxlength="100"'))}
   ${field('Health problem, injury', input('health', m.health, 'maxlength="150"'))}
   ${field('Batch', input('batch', m.batch, 'maxlength="40" placeholder="Morning or Evening"'))}
+  ${field('Notes', input('notes', m.notes, 'maxlength="500"'), 'span2')}
   ${plan ? `<div class="row">${check('Personal trainer', `name="pt" ${m.pt ? 'checked' : ''}`)}${check('Diet plan', `name="diet" ${m.diet ? 'checked' : ''}`)}</div>
   ${monthsField(m.months)}
   ${field('Starts on', `<input type="date" name="start" value="${esc(m.start || today())}">`)}
@@ -446,7 +455,7 @@ Object.assign(actions, {
     const gyms = current === 'accounts', r = await api('POST', gyms ? '/api/admin/gyms/delete' : '/api/members/delete', { ids: [...picked] });
     dlg.close();
     toast(`${r.deleted} deleted. They can be brought back for 30 days.`);
-    if (gyms) { picked.clear(); await loadAccounts(); } else await load();
+    if (gyms) { const open = picked.has(view); picked.clear(); if (open) return actions['view-close'](); await loadAccounts(); } else await load();
   },
   async seed() { await api('POST', '/api/seed'); toast('Sample members loaded'); await load(); },
   'member-new'() { openDialog(dialogForm('New member', 'member-save', '', memberForm({}, true), 'Save member')); },
@@ -507,6 +516,7 @@ Object.assign(actions, {
     dlg.close();
     toast('Member deleted. Bring them back from the Deleted tab within 30 days.');
     await refresh();
+    trail.pop(); // the page of the member who is gone is not one to go back to
     go('#/members');
   },
   async 'pay-full'(el) {
@@ -595,7 +605,7 @@ Object.assign(actions, {
     try {
       const r = await api('POST', '/api/import/read', await fileData(file));
       imp = { rows: [...(imp.rows || []), ...r.rows], done: null };
-      toast(r.rows.length ? `${r.rows.length} rows read. Check them.` : 'No member was found in this file.', !r.rows.length);
+      toast(r.more ? `${r.rows.length} rows read. The file holds ${r.more} more: save these, then give the rest as another file.` : r.rows.length ? `${r.rows.length} rows read. Check them.` : 'No member was found in this file.', !r.rows.length || !!r.more);
     } finally { route(); }
   },
   'import-drop'(el) { el.closest('tr').remove(); },
@@ -603,8 +613,10 @@ Object.assign(actions, {
   async 'import-save'() {
     const rows = typedRows();
     if (!rows.length) return toast('There is no row to save.', true);
-    const done = await api('POST', '/api/import/save', { rows });
-    imp = { rows: done.skipped.map((k) => rows[k.row - 1]), done };
+    // 600 at a time is what the server takes. The rest stay on the screen, to be saved with the next press.
+    const done = await api('POST', '/api/import/save', { rows: rows.slice(0, 600) });
+    imp = { rows: [...done.skipped.map((k) => rows[k.row - 1]), ...rows.slice(600)], done };
+    if (rows.length > 600) toast(`${rows.length - 600} rows are still below. Press Save again for them.`);
     await refresh();
     return route();
   },
@@ -684,7 +696,7 @@ function listen() {
     // A browser that never reports the end of listening, or refuses to start, must not leave the mic dead until a reload.
     // What it had heard to the end by then is the owner's; a mutter caught on the way is not.
     let whole = false;
-    const stuck = setTimeout(() => { rec.dropped = !whole; try { rec.abort(); } catch { /* it never started */ } end(); }, 25000);
+    const stuck = setTimeout(() => { rec.dropped = !!text.trim() && !whole; try { rec.abort(); } catch { /* it never started */ } end(); }, 25000);
     Object.assign(rec, { lang: 'hi-IN', interimResults: true });
     rec.onresult = (e) => { text = [...e.results].map((r) => r[0].transcript).join(' '); whole = [...e.results].every((r) => r.isFinal); const box = $('#boloInput'); if (box) box.value = text; };
     rec.onerror = (e) => { why = e.error; };
@@ -726,9 +738,12 @@ async function quiet(settle) {
 }
 // `pressed` is the owner pressing the mic, who is told even that nothing was heard. `mine` is the turn this listening
 // belongs to: when something else has been said or sent while the voice was finishing, it does not open.
-async function listenNext(pressed, mine = turn) {
+// `sure`: the last thing heard was dropped as the assistant's own voice, and it has not spoken since. What is heard now
+// is the owner, even when it repeats the question's words ('अभी 2000 रुपये जमा कर रहे हैं').
+async function listenNext(pressed, mine = turn, sure = false) {
   if (!Speech || current !== 'bolo' || hearing) return undefined;
   await quiet(!pressed);
+  if (window.speechSynthesis && speechSynthesis.speaking) await quiet(true); // something began to be said in that last moment
   if (current !== 'bolo' || hearing || mine !== turn || thinking) return undefined;
   micNote = '';
   let said;
@@ -740,10 +755,10 @@ async function listenNext(pressed, mine = turn) {
   // The phone stops listening at a pause. A sentence left hanging ('मैं बोल रहा हूँ कि', '... और') is not sent as it is:
   // the rest is waited for, twice at most, and the whole is sent as one.
   for (let more = 0; more < 2 && HANGING.test(said.trim()); more++) {
-    try { said = `${said} ${await listen()}`; } catch { break; }
+    try { said = `${said} ${await listen()}`; } catch (e) { if (e.message === 'aborted') return renderTalk(); break; } // thrown away: the first half is not sent alone
   }
-  if (echoes(said)) return mine === turn ? listenNext(pressed, mine) : undefined; // its own voice: not sent, and it listens on
-  return heard(said, true); // whatever goes wrong with the answer is shown like any other error, not swallowed here
+  if (!sure && !(reg && !reg.done) && echoes(said)) return mine === turn ? listenNext(pressed, mine, true) : undefined; // its own voice: not sent, and it listens on
+  return heard(said, !sure); // whatever goes wrong with the answer is shown like any other error, not swallowed here
 }
 // Returns whether it was said to its end.
 async function says(text, more) {
@@ -753,7 +768,7 @@ async function says(text, more) {
 }
 
 async function regTurn(said, spoken) {
-  const mine = ++turn;
+  const mine = ++turn, it = reg; // `it`: a reply that comes after the registration was started over belongs to nobody
   thinking = mine;
   renderTalk();
   try {
@@ -762,14 +777,16 @@ async function regTurn(said, spoken) {
       if (e.status === 401 || e.status === 402) throw e;
       // Nothing is lost: the form is as it was, and the same question waits for the same answer.
       rested(mine);
+      if (reg !== it) return undefined;
       if (await says(noAnswer(e, 'अपना जवाब फिर से बोलिए।')) && mine === turn) aside(listenNext(false, mine));
       return undefined;
     }
+    if (reg !== it) return undefined;
     if (r.echo) { // the question itself, heard back from the loudspeaker: nobody answered. The bubble goes and it listens on
       talk.pop();
       rested(mine);
       renderTalk();
-      if (mine === turn) aside(listenNext(false, mine));
+      if (mine === turn) aside(listenNext(false, mine, true));
       return undefined;
     }
     if (r.setup) { reg = null; rested(mine); return await says(r.say, { settings: true }); } // the gym has no prices yet
@@ -824,7 +841,7 @@ function startReg() {
 async function heard(text, spoken) {
   text = text.trim();
   if (!text || thinking) return undefined;
-  const mine = ++turn, box = $('#boloInput');
+  const mine = ++turn, box = $('#boloInput'), log = talk; // `log`: a reply that comes after the talk was begun afresh is dropped
   if (box) box.value = '';
   // A change the assistant has just asked leave for. It waits for this one message only: a yes carries it out.
   const formAsked = !!(talk.at(-1) || {}).form; // 'shall I save?' was the last thing said
@@ -843,8 +860,10 @@ async function heard(text, spoken) {
       // No answer came, so nothing was changed. It is said in the talk, where the owner is looking, and a 'shall I?'
       // that was waiting for this reply waits again, with its buttons.
       rested(mine);
-      return await says(noAnswer(e, asked ? 'कुछ बदला नहीं है। फिर से "हाँ, कर दो" दबाइए।' : 'फिर से बोलिए।'), { pending: asked });
+      if (talk !== log) return undefined;
+      return await says(noAnswer(e, asked ? 'कुछ बदला नहीं है। फिर से "हाँ, कर दो" दबाइए।' : filled ? 'फॉर्म वैसा ही है। फिर से "हाँ" बोलिए।' : 'फिर से बोलिए।'), { pending: asked, form: filled });
     }
+    if (talk !== log) return undefined;
     if (r.echo) {
       // The server knew the words for the assistant's own last sentence: nobody said them. The bubble goes, what was
       // waiting for a yes waits again, and the microphone listens on.
@@ -852,7 +871,7 @@ async function heard(text, spoken) {
       if (asked && talk.at(-1)) talk.at(-1).pending = asked;
       rested(mine);
       renderTalk();
-      if (mine === turn) aside(listenNext(false, mine));
+      if (mine === turn) aside(listenNext(false, mine, true));
       return undefined;
     }
     if (r.run && asked) {
@@ -860,6 +879,7 @@ async function heard(text, spoken) {
         if (e.status === 401 || e.status === 402) throw e;
         rested(mine);
         // The server said no and why (then nothing was changed), or it did not answer (then nobody knows yet).
+        if (e.status === 404) return await says('यह मेंबर अब जिम में नहीं है, पहले ही हटाया जा चुका है। कुछ बदला नहीं है।');
         if (e.status && e.status < 500) return await says(`यह नहीं हो पाया, कुछ बदला नहीं है। कारण: ${e.message}`);
         await refresh().catch(() => {});
         return await says('सर्वर से जवाब नहीं आया, इसलिए पक्का नहीं कि यह हुआ या नहीं। एक बार Members में देख लीजिए; न हुआ हो तो फिर से बोलिए।');
@@ -877,8 +897,8 @@ async function heard(text, spoken) {
     if (done) return await says(done);
     if (r.start === 'register') return startReg();
     // `keep`: what was said was neither a yes nor a no nor anything else (a cough, the gym, 'hmm'): the question still waits.
-    const waits = r.pending || (r.keep ? asked : undefined);
-    if (await says(r.answer, { pending: waits, remind: r.remind, page: r.page }) && (waits || r.asks) && mine === turn) aside(listenNext(false, mine)); // it asked something, and listens for the reply
+    const waits = r.pending || (r.keep ? asked : undefined), still = filled && !!r.keep; // the form's own 'shall I save?' waits on as well
+    if (await says(r.answer, { pending: waits, form: still, remind: r.remind, page: r.page }) && (waits || still || r.asks) && mine === turn) aside(listenNext(false, mine)); // it asked something, and listens for the reply
     return undefined;
   } finally {
     rested(mine);
@@ -888,7 +908,7 @@ async function heard(text, spoken) {
 // Does what the owner said yes to, by the same requests as the buttons on the member's page, and reads the gym afresh
 // so that every page shows it. Returns what to say.
 // What is said in the talk when the server gave no answer at all, with what the owner should do next.
-const noAnswer = (e, next) => (e.status === 429 ? `एक मिनट में बहुत सारे सवाल हो गए। एक मिनट रुकिए, फिर ${next}` : `अभी सर्वर से जवाब नहीं आया (इंटरनेट देखिए, या सर्वर अपडेट हो रहा है)। ${next}`);
+const noAnswer = (e, next) => (e.status === 429 ? `एक मिनट में बहुत सारे सवाल हो गए। एक मिनट रुकिए। ${next}` : `अभी सर्वर से जवाब नहीं आया (इंटरनेट देखिए, या सर्वर अपडेट हो रहा है)। ${next}`);
 async function carryOut({ do: what, id, body }) {
   if (what === 'payall') {
     const all = await api('POST', '/api/members/pay', body);
@@ -963,24 +983,35 @@ views.bolo = (id, q) => {
 Object.assign(actions, {
   'reg-start'() { stopVoice(); talk = []; aside(startReg()); },
   'reg-cancel'() { stopVoice(); turn++; reg = null; delete (talk.at(-1) || {}).pending; talk.push({ who: 'ai', text: 'ठीक है, रद्द कर दिया।' }); renderTalk(); },
-  'reg-edit'() { openDialog(dialogForm('New member', 'member-save', '', memberForm({ ...reg.form, fee: reg.fee }, true), 'Save member')); },
+  // The microphone that waits for a spoken yes is closed: a stray 'ठीक है' must not save the form under the edit box.
+  // The fee box is left empty, which means the gym's price for the plan as the box ends up with it.
+  'reg-edit'() { stopVoice(); turn++; openDialog(dialogForm('New member', 'member-save', '', memberForm(reg.form, true), 'Save member')); },
   async 'reg-save'() {
-    if (!reg) return undefined; // a second tap, after the first has saved it
+    const it = reg;
+    if (!it || it.saving) return undefined; // a second tap, while the first is on its way or after it has saved
     stopVoice(); // the microphone that waited for a spoken yes must not stay open while the assistant speaks
     turn++;
-    const f = reg.form, m = await api('POST', '/api/members', { ...f, fee: reg.fee, mode: 'Cash' });
-    reg = null;
-    await refresh();
-    await says(`${m.name} जी जुड़ गए।${G.due(m) ? ` ${Math.round(G.due(m))} रुपये बाकी हैं, उनका रिमाइंडर रोज़ डैशबोर्ड पर मिलेगा।` : ''} व्हाट्सऐप पर स्वागत संदेश भेज दीजिए।`, { welcome: m.id });
+    it.saving = true;
+    let m;
+    try { m = await api('POST', '/api/members', { ...it.form, fee: it.fee, mode: 'Cash' }); } finally { it.saving = false; }
+    if (reg === it) reg = null;
+    await refresh().catch(() => {}); // the member is saved; the version check reads the gym again anyway
+    // An order asked while the card waited ('... हटा दूँ?') still waits: its question goes back under the news.
+    const waits = (talk.at(-1) || {}).pending ? talk.pop() : null;
+    const told = says(`${m.name} जी जुड़ गए।${G.due(m) ? ` ${Math.round(G.due(m))} रुपये बाकी हैं, उनका रिमाइंडर रोज़ डैशबोर्ड पर मिलेगा।` : ''} व्हाट्सऐप पर स्वागत संदेश भेज दीजिए।`, { welcome: m.id });
+    if (waits) { talk.push(waits); renderTalk(); }
+    return told;
   },
   'bolo-mic'() {
     if (hearing) return hearing.halt();
+    if (thinking) return undefined; // an answer is on its way: it will open the mic itself if it asks something
     if (window.speechSynthesis) speechSynthesis.cancel(); // pressing the mic while it speaks: it stops and listens
     turn++;
     return aside(listenNext(true, turn));
   },
-  'bolo-send'(form) { stopVoice(); aside(heard(form.said.value)); },
-  'bolo-ask'(el) { stopVoice(); aside(heard(el.textContent)); },
+  // Nothing to send, or an answer still on its way: the voice is not cut off for it, so the question being read still gets its microphone.
+  'bolo-send'(form) { if (!form.said.value.trim() || thinking) return; stopVoice(); aside(heard(form.said.value)); },
+  'bolo-ask'(el) { if (thinking) return; stopVoice(); aside(heard(el.textContent)); },
 });
 
 // ---- a backup on this computer, every seven days
@@ -1208,9 +1239,9 @@ Object.assign(actions, {
   },
   async 'account-password-save'(form) { await api('PUT', `/api/admin/gyms/${form.dataset.id}`, fd(form)); dlg.close(); toast('Login saved. That gym is signed out everywhere.'); await loadAccounts(); },
   'account-delete'(el) {
-    sure(`Delete ${el.dataset.name}?`, `The gym, its login, its ${el.dataset.members} members and all their memberships and payments leave at once and it is signed out. For 30 days you can bring it back from Deleted gyms on this page; after that it is gone for good. To only stop it signing in, use Switch off.`, 'account-delete-yes', el.dataset.id, 'Delete gym');
+    sure(`Delete ${el.dataset.name}?`, `The gym, its login, its ${el.dataset.members} member${el.dataset.members === '1' ? '' : 's'} and all their memberships and payments leave at once and it is signed out. For 30 days you can bring it back from Deleted gyms on this page; after that it is gone for good. To only stop it signing in, use Switch off.`, 'account-delete-yes', el.dataset.id, 'Delete gym');
   },
-  async 'account-delete-yes'(el) { await api('DELETE', `/api/admin/gyms/${el.dataset.id}`); dlg.close(); toast('Gym deleted. It can be brought back for 30 days.'); await loadAccounts(); },
+  async 'account-delete-yes'(el) { await api('DELETE', `/api/admin/gyms/${el.dataset.id}`); dlg.close(); toast('Gym deleted. It can be brought back for 30 days.'); if (view === el.dataset.id) return actions['view-close'](); return loadAccounts(); },
   async 'account-restore'(el) { await api('POST', `/api/admin/gyms/${el.dataset.id}/restore`); toast('The gym is back'); await loadAccounts(); },
   async 'account-backups'(el) {
     const kept = await api('GET', `/api/admin/gyms/${el.dataset.id}/backups`);

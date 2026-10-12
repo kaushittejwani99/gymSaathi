@@ -130,12 +130,18 @@ async function talkChecks() {
     ['run', 'run', 'run', 'run', 'pay rn', 'kept', 'no', 'kept', 'kept', 'kept', 'kept']);
   const moved = [...shallI, { who: 'me', text: 'priya ka hisaab' }, { who: 'ai', text: 'Priya Jain की मेंबरशिप 31 Oct 2026 तक है, और ₹400 बाकी है।' }], carried = [...shallI, { who: 'me', text: 'हाँ' }, { who: 'ai', text: 'Rohit को हटा दिया। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।' }];
   assert.deepEqual([await got('हाँ', moved), await got('ठीक है', moved), await got('ठीक है', carried), await got('ok')], [nothingWaits, nothingWaits, 'ठीक है। और कुछ पूछना हो तो बताइए।', 'ठीक है। और कुछ पूछना हो तो बताइए।']);
+  // A no is the whole of a short reply, as a yes is: a question that holds a 'नहीं' is a question, and 'बस करो' is a no
+  assert.deepEqual([await kept('किसने फीस नहीं दी', 'save'), await kept('राहुल ने पैसे नहीं दिए', 'delete'), await kept('बस करो', 'delete'), await kept('bas karo', 'save'), await kept('नहीं करना', 'pay'), await kept('mat hatao', 'delete'), await kept('ji nahi', 'renew'),
+    await kept('रद्द कर दो', 'save'), await kept('हाँ बस', 'delete')], ['other', 'other', 'no', 'no', 'no', 'no', 'no', 'no', 'run']);
   // Money is taken on an order, or on being told who paid in that very sentence (or by 'usne'). A piece of the
   // assistant's own sentence, a 'diya' beside any number, and what was paid another day are not money received
   const aboutPriya = [{ who: 'me', text: 'priya ka hisaab' }, { who: 'ai', text: 'Priya Jain की मेंबरशिप 31 Oct 2026 तक है, और ₹400 बाकी है।' }];
   assert.deepEqual([await got('priya ne 200 diye'), await got('priya ki fees jama ho gayi'), await got('usne 200 de diye', aboutPriya), await got('fees jama kar do', aboutPriya), await got('priya se 300 mile')], ['pay p', 'pay p', 'pay p', 'pay p', 'pay p']);
   for (const said of ['जमा हो गए', 'के 200 जमा हो गए', 'jama ho gaye', 'priya ka weight 62 kar diya', 'priya ko 3 mahine ka plan diya', 'priya ne kal 200 diye the', 'usne fees de di thi'])
     assert.equal((await ai.chat({ question: said, db: club, today, history: aboutPriya })).pending, undefined, said);
+  // 'Priya aa gayi' is Priya arriving, a plan or a locker given is not money; 'usne 200 diye' after a talk about her is
+  for (const said of ['priya aa gayi', 'प्रिया जैन जी आ गए', 'प्रिया को 3 महीने का प्लान दिया', 'priya ko locker 14 de diya', 'priya mil gayi']) assert.equal((await ai.chat({ question: said, db: club, today })).pending, undefined, said);
+  assert.deepEqual([await got('usne 200 diye', aboutPriya), await got('उसने 200 दिए', aboutPriya), await got('priya ki fees aa gayi'), await got('प्रिया ने दे दी')], ['pay p', 'pay p', 'pay p', 'pay p']);
   // The assistant's own sentence, brought back whole by the microphone, is known by its sound (the phone writes the name
   // in Hindi) and dropped. Typed, the same words are the owner's
   const paidPart = [{ who: 'me', text: 'priya ne 200 diye' }, { who: 'ai', text: 'Priya Jain के ₹200 जमा हो गए। अब ₹200 बाकी हैं।' }], heardBack = 'प्रिया जैन के 200 रुपये जमा हो गए अब 200 बाकी हैं';
@@ -193,6 +199,9 @@ async function talkChecks() {
   assert.deepEqual([await replied('health', 'पहले बीपी की दवाई चलती थी अब बंद कर दी'), await replied('pt', 'रहने दो जी'), await replied('diet', 'बाद में देखेंगे जी'), await replied('pt', 'जी'), await replied('pt', 'हाँ जी चाहिए'), await replied('paid', 'कल 500 दूंगा'),
     await replied('paid', '500'), await replied('goal', 'cancel karo'), await replied('gender', 'पुरुष हैं या महिला', { spoken: true }), await replied('gender', 'महिला', { spoken: true }), await replied('batch', 'शाम को आएँगे', { spoken: true })],
     ['पहले बीपी की दवाई चलती थी अब बंद कर दी', false, false, true, true, 0, 500, 'cancelled', 'echo', 'Female', 'Evening']);
+  // Only the order cancels a registration, however long the sentence; an honest answer may reuse the question's words
+  assert.deepEqual([await replied('health', 'रजिस्ट्रेशन रद्द कर दो'), await replied('goal', 'ye registration band kar do'), await replied('health', 'बंद कर दी'), await replied('goal', 'smoking band karni hai'),
+    await replied('paid', 'अभी 500 जमा कर रहे हैं', { spoken: true }), await replied('paid', 'अभी कितने पैसे जमा कर रहे हैं', { spoken: true })], ['cancelled', 'cancelled', 'बंद कर दी', 'smoking band karni hai', 500, 'echo']);
   // With the AI on, a question about a member carries that member's whole record, however many members the gym has and
   // wherever in the list the member is. A question about the whole gym carries every member in short
   const big = { gym: { name: 'Big Gym' }, payments: [], members: [...Array.from({ length: 600 }, (x, i) => member(`m${i}`, `Member${i} Test`, `97${10000000 + i}`, 0)), { ...member('z', 'Dinesh Kumar', '9829055555', 2700), goal: 'Muscle gain' }] };
@@ -221,7 +230,7 @@ async function talkChecks() {
     assert.deepEqual([(await told({ do: 'pay', mobile: '98290 33333' })).pending.body, (await told({ do: 'pay', mobile: '9829044444', amount: 500 })).pending, (await told({ do: 'pay', mobile: '9000000000', amount: 5 })).pending],
       [{ amount: 1000, mode: 'Cash' }, undefined, undefined]); // no amount said is the whole due; nothing due and nobody found change nothing
     const renewing = await told('```json\n{"do":"renew","mobile":"9829044444","months":3,"paid":5000}\n```');
-    assert.deepEqual([renewing.answer.split('\n'), renewing.pending], [['Priya Jain (9829044444) की मेंबरशिप 3 महीने के लिए रिन्यू करूँ?', '- 1 Nov 2026 से 31 Jan 2027', '- फीस: ₹2,700', '- अभी जमा: ₹2,700 (कैश में)'], { do: 'renew', id: 'd', body: { months: 3, paid: 2700, mode: 'Cash' } }]);
+    assert.deepEqual([renewing.answer.split('\n'), renewing.pending], [['Priya Jain (9829044444) की मेंबरशिप 3 महीने के लिए रिन्यू करूँ?', '- 1 Nov 2026 से 31 Jan 2027', '- फीस: ₹2,700', '- अभी जमा: ₹2,700 (कैश में)'], { do: 'renew', id: 'd', body: { months: 3, paid: 2700, mode: 'Cash', start: '2026-11-01' } }]);
     assert.deepEqual([(await told({ do: 'renew', mobile: '9829044444' })).answer, (await told({ do: 'renew', mobile: '9829044444', months: 99 })).pending], ['Priya Jain की मेंबरशिप कितने महीने के लिए रिन्यू करनी है?', undefined]);
     const editing = await told({ do: 'edit', mobile: '9829044444', set: { goal: 'Muscle gain', weight: 62, phone: '12345', months: 12, fee: 0, gymId: 'x' } });
     assert.deepEqual([editing.answer.split('\n'), editing.pending.body], [['Priya Jain (9829044444) की जानकारी बदलूँ?', '- वज़न: 62', '- लक्ष्य: Muscle gain'],
@@ -250,11 +259,11 @@ async function talkChecks() {
     global.fetch = () => { throw new Error('the AI is not asked'); };
     const order = async (question, history = []) => { const r = await ai.chat({ question, db: gymDb, today, history }); return r.pending ? [r.pending.do, r.pending.id, ...Object.values(r.pending.body)] : r.answer.split('\n')[0]; };
     assert.deepEqual([await order('rahul verma ne 300 diye'), await order('प्रिया जैन की मेंबरशिप 3 महीने के लिए रिन्यू कर दो'), await order('rahul verma ki fees jama kar do upi se'), await order('priya ko ek saal ke liye renew karo')],
-      [['pay', 'b', 300, 'Cash'], ['renew', 'd', 3, 0, 'Cash'], ['pay', 'b', 400, 'UPI'], ['renew', 'd', 12, 0, 'Cash']]);
+      [['pay', 'b', 300, 'Cash'], ['renew', 'd', 3, 0, 'Cash', '2026-11-01'], ['pay', 'b', 400, 'UPI'], ['renew', 'd', 12, 0, 'Cash', '2026-11-01']]);
     const which = [{ who: 'me', text: 'rahul ki fees jama kar do' }, { who: 'ai', text: (await order('rahul ki fees jama kar do')) + '\n- Rahul Sharma: 9829011111\n- Rahul Verma: 9829022222\n- Rahul Sharma: 9829033333' }];
     const months = [{ who: 'me', text: 'priya ki membership renew kar do' }, { who: 'ai', text: await order('priya ki membership renew kar do') }];
     assert.deepEqual([which[1].text.split('\n')[0], await order('3333', which), months[1].text, await order('दो महीने', months), await order('फीस जमा कर दो', [{ who: 'me', text: 'rahul verma ka hisaab' }])],
-      ['इस नाम के 3 मेंबर हैं। किसकी बात कर रहे हैं? मोबाइल नंबर बताइए।', ['pay', 'c', 1000, 'Cash'], 'Priya Jain की मेंबरशिप कितने महीने के लिए रिन्यू करनी है?', ['renew', 'd', 2, 0, 'Cash'], ['pay', 'b', 400, 'Cash']]);
+      ['इस नाम के 3 मेंबर हैं। किसकी बात कर रहे हैं? मोबाइल नंबर बताइए।', ['pay', 'c', 1000, 'Cash'], 'Priya Jain की मेंबरशिप कितने महीने के लिए रिन्यू करनी है?', ['renew', 'd', 2, 0, 'Cash', '2026-11-01'], ['pay', 'b', 400, 'Cash']]);
     // A question is never an order, and neither is an order about nobody
     process.env.GEMINI_API_KEY = '';
     assert.deepEqual([(await order('rahul verma ki fees jama hui ya nahi')).slice(0, 11), (await order('kabir ne 500 diye')).slice(0, 14), (await order('priya ne kitne diye')).slice(0, 10)], ['Rahul Verma', 'यह मुझे समझ नह', 'Priya Jain']);
@@ -579,6 +588,9 @@ async function apiChecks() {
     const five = await ok(read({ name: 'gym-500-members.csv', type: 'text/csv', data: b64(['Name,Phone,DOJ,Plan,Total,Due', ...Array.from({ length: 500 }, (x, i) => `Member ${i},9${700000000 + i},05-08-26,1 year,9000,${i % 2 ? 0 : 400}`)].join('\n')) }));
     assert.deepEqual([five.rows.length, five.rows[499]], [500, { name: 'Member 499', phone: '9700000499', start: '2026-08-05', months: 12, fee: 9000, due: 0, gender: '', age: '', batch: '', notes: '' }]);
     const heads = (text) => require('./lib/ai').byHeadings(text.split('\n').map((l) => l.split(',')));
+    // 'Pending' and 'Gender' are columns of their own, not the end date (pENDing, gENDer); 'Member ID' is not the name
+    const headed = heads('Member ID,Name,Mobile,Gender,Joining Date,Plan,Fees,Pending\n101,Ravi,9829000001,Male,01/09/2026,3 months,2700,700')[0];
+    assert.deepEqual([headed.name, headed.gender, headed.due, headed.fee, headed.months, headed.end], ['Ravi', 'Male', 700, 2700, 3, undefined]);
     assert.deepEqual([heads('Naam,Phone No,End Date,Start Date,Due Amount,Total Amount,Gender\nA,9829000001,04.11.2026,2026-08-05,100,900,F\nB,9829000002,,,,,male'), heads('A,B\n1,2'), heads('Name,Roll number\nX,5')],
       [[{ name: 'A', phone: '9829000001', end: '2026-11-04', start: '2026-08-05', due: 100, fee: 900, gender: 'Female' }, { name: 'B', phone: '9829000002', gender: 'Male' }], null, null]);
     // Headings that do not say enough, a photo and a PDF all need the AI, and say so when there is no key
@@ -774,6 +786,29 @@ async function apiChecks() {
     await daily(new Date(Date.now() + 31 * 864e5));
     assert.deepEqual([(await db.find('customers', { _id: twin.id })).length, (await db.find('memberships', { customerId: twin.id })).length, (await db.find('customers', { _id: rahul.id })).length,
       (await db.find('gyms', { _id: third })).length, (await db.find('customers', { gymId: third })).length, (await db.find('backups', { gymId: third })).length], [0, 0, 1, 0, 0, 0]);
+    // What the end-to-end run found, in a gym of its own. Loading and clearing the sample members leaves the gym's
+    // prices as they were typed. An old member typed in today joined back then; a number with a digit too many is
+    // refused, not cut into somebody else's; an edit from a form without a note box keeps the note
+    await ok(owner('POST', '/api/admin/gyms', { email: 'check.gym', password: 'check-gym-pass', name: 'Check Gym', owner: 'C', phone: '9829000077', price1: 500 }));
+    const cg = browser();
+    await ok(cg('POST', '/api/auth/login', { email: 'check.gym', password: 'check-gym-pass' }));
+    await ok(cg('POST', '/api/seed'));
+    await ok(cg('DELETE', '/api/sample'));
+    const asTyped = (await ok(cg('GET', '/api/data'))).gym;
+    assert.deepEqual([asTyped.price1, asTyped.price3, asTyped.price12, asTyped.ptPrice, asTyped.timings], [500, 0, 0, 0, '']);
+    const backThen = G.addDays(today, -20), old = await ok(cg('POST', '/api/members', { name: 'Purana Member', phone: '9829077001', months: 1, paid: 300, start: backThen }));
+    await ok(cg('PUT', `/api/members/${old.id}`, { name: 'Purana Member', phone: '9829077001', notes: 'locker 12' }));
+    assert.deepEqual([old.joinedAt, G.due(old), (await ok(cg('PUT', `/api/members/${old.id}`, { name: 'Purana Member', phone: '9829077001' }))).notes,
+      await status(cg('POST', '/api/members', { name: 'Extra Digit', phone: '98290770022', months: 1 })), await status(cg('POST', '/api/members', { name: 'With Code', phone: '+91 98290 77003', months: 1 }))], [backThen, 200, 'locker 12', 400, 200]);
+    // A renewal takes what is still pending together with its own fee, as its box says; sent twice it is one renewal
+    const sameAgain = () => cg('POST', `/api/members/${old.id}/renew`, { months: 2, paid: 1200, start: G.addDays(old.end, 1) }), renewedOld = await ok(sameAgain());
+    assert.deepEqual([renewedOld.fee, renewedOld.paid, G.due(renewedOld), await status(sameAgain()), await status(cg('POST', `/api/members/${old.id}/renew`, { months: 1, paid: 99999 })), (await ok(cg('GET', `/api/data`))).members.find((m) => m.id === old.id).history.length],
+      [1200, 1200, 0, 409, 400, 1]);
+    // A renewal is not undone when an earlier payment was raised to cover it: more would be paid than is owed
+    const raised = await ok(cg('POST', '/api/members', { name: 'Raised Payment', phone: '9829077004', months: 1, paid: 250 }));
+    await ok(cg('POST', `/api/members/${raised.id}/renew`, { months: 1 }));
+    await ok(cg('PUT', `/api/payments/${(await ok(cg('GET', '/api/data'))).payments.find((p) => p.memberId === raised.id).id}`, { amount: 1000 }));
+    assert.equal(await status(cg('DELETE', `/api/members/${raised.id}/period`)), 400);
     await ok(owner('POST', '/api/auth/logout'));
     assert.equal(await status(owner('GET', '/api/admin/gyms')), 401);
     // One file per collection, and a write without the JSON content type is refused
