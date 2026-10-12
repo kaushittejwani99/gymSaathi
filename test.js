@@ -116,6 +116,7 @@ async function talkChecks() {
   const regTurn = (asked, said, form = full) => ai.turn({ gym: shop.gym, form, asked, said });
   assert.deepEqual([(await regTurn('months', 'do saal', { name: 'Aman', phone: '9829012345' })).form.months, (await regTurn('paid', 'aadha')).form.paid, (await regTurn('paid', 'aadha')).say.endsWith('सेव कर दूँ?'), (await regTurn('paid', 'cancel karo')).cancel,
     (await ai.chat({ question: 'haan save kar do', db: shop, today, confirming: true })).run, (await ai.chat({ question: 'cancel karo', db: shop, today, confirming: true })).no], [24, 1350, true, true, true, true]);
+  assert.deepEqual([(await regTurn('batch', 'शाम को', { name: 'Aman', phone: '9829012345' })).form.batch, (await regTurn('goal', 'बॉडी बनानी है', { name: 'Aman', phone: '9829012345' })).form.goal], ['Evening', 'Muscle gain']);
   // With the AI on, a question about a member carries that member's whole record, however many members the gym has and
   // wherever in the list the member is. A question about the whole gym carries every member in short
   const big = { gym: { name: 'Big Gym' }, payments: [], members: [...Array.from({ length: 600 }, (x, i) => member(`m${i}`, `Member${i} Test`, `97${10000000 + i}`, 0)), { ...member('z', 'Dinesh Kumar', '9829055555', 2700), goal: 'Muscle gain' }] };
@@ -151,6 +152,13 @@ async function talkChecks() {
       { name: 'Priya Jain', phone: '9829044444', gender: '', age: '', weight: 62, height: '', goal: 'Muscle gain', health: '', batch: '', notes: '' }]); // a bad number and what is no detail of a member are left out
     assert.deepEqual([(await told({ do: 'edit', mobile: '9829044444', set: { goal: 'Weight loss' } })).pending, (await told({ do: 'new' })).start, (await told('{"do": pay')).answer.startsWith('माफ़ कीजिए'), (await told({ do: 'burn', mobile: '9829044444' })).pending, (await told({ do: 'delete', mobile: '9829044444' })).pending.do],
       [undefined, 'register', true, undefined, 'delete']);
+    // The AI may not say that it changed something. When it does, it is asked once more for the order; and when it does so
+    // again, the owner is told that nothing was changed. A question may be answered with 'जमा कर दी है', truthfully
+    const replies = async (texts, question) => { const left = [...texts]; global.fetch = async () => Response.json({ steps: [{ type: 'model_output', content: [{ type: 'text', text: left.shift() }] }] }); const r = await ai.chat({ question, db: gymDb, today }); return [r.pending ? `${r.pending.body.goal}, ${r.pending.body.height}` : r.answer.split('\n')[0].slice(0, 10), left.length]; };
+    const claim = 'प्रिया का गोल बदलकर मसल गेन कर दिया गया है।', json = '{"do":"edit","mobile":"9829044444","set":{"goal":"Muscle gain"}}';
+    assert.deepEqual([await replies([claim, json], 'priya ka goal muscle gain rakhna hai'), await replies([claim, claim], 'priya ka goal muscle gain rakhna hai'), await replies(['प्रिया ने फीस जमा कर दी है।', json], 'priya ne fees di ya nahi'),
+      await replies(['यह मेंबर के पेज पर जाकर होगा।', '{"do":"edit","mobile":"9829044444","set":{"height":"5 ft 8 in"}}'], 'priya ki height 5 foot 8 inch likhni hai'), await replies(['{"do":"edit","mobile":"9829044444","set":{"goal":"मसल गेन"}}', json], 'priya ka goal muscle gain rakhna hai')],
+      [['Muscle gain, ', 0], ['माफ़ कीजिए', 0], ['प्रिया ने ', 1], ['Weight loss, 5 ft 8 in', 0], ['Muscle gain, ', 0]]);
     // 'Shall I?' is answered without the AI: a yes sends it, a no drops it, anything else is a new message. So are the
     // plain orders: money taken and a renewal, with 'which one?' and 'for how many months?' asked on the way
     global.fetch = () => { throw new Error('the AI is not asked'); };
