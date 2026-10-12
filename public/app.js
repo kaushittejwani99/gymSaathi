@@ -664,6 +664,7 @@ const MIC = { 'not-allowed': BLOCKED, 'service-not-allowed': BLOCKED,
   'language-not-supported': 'इस ब्राउज़र में हिंदी सुनना नहीं चलता। GymSaathi को Chrome में खोलिए। तब तक लिख कर भेज सकते हैं।',
   failed: 'माइक शुरू नहीं हुआ। पेज को एक बार रीलोड कीजिए, फिर माइक दबाइए।' };
 let micNote = '';
+const HANGING = /(^|\s)(कि|और|तो|या|लेकिन|ki|aur|toh?|lekin)$/;
 // After the assistant has spoken it listens for the answer by itself, so a registration needs no button between questions.
 // Each new thing the owner says or sends starts a new turn. Whatever the assistant was still saying for an older turn is
 // cut short, and that older turn no longer opens the microphone when it ends.
@@ -679,6 +680,11 @@ async function listenNext(pressed) {
     micNote = MIC[e.message] || (pressed && e.message === 'no-speech' ? 'कुछ सुनाई नहीं दिया। माइक दबा कर फिर बोलिए।' : '');
     if (MIC[e.message]) toast(micNote, true);
     return renderTalk();
+  }
+  // The phone stops listening at a pause. A sentence left hanging ('मैं बोल रहा हूँ कि', '... और') is not sent as it is:
+  // the rest is waited for, twice at most, and the whole is sent as one.
+  for (let more = 0; more < 2 && HANGING.test(said.trim()); more++) {
+    try { said = `${said} ${await listen()}`; } catch { break; }
   }
   return heard(said); // whatever goes wrong with the answer is shown like any other error, not swallowed here
 }

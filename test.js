@@ -169,6 +169,16 @@ async function talkChecks() {
     assert.deepEqual([await replies([claim, json], 'priya ka goal muscle gain rakhna hai'), await replies([claim, claim], 'priya ka goal muscle gain rakhna hai'), await replies(['प्रिया ने फीस जमा कर दी है।', json], 'priya ne fees di ya nahi'),
       await replies(['यह मेंबर के पेज पर जाकर होगा।', '{"do":"edit","mobile":"9829044444","set":{"height":"5 ft 8 in"}}'], 'priya ki height 5 foot 8 inch likhni hai'), await replies(['{"do":"edit","mobile":"9829044444","set":{"goal":"मसल गेन"}}', json], 'priya ka goal muscle gain rakhna hai')],
       [['Muscle gain, ', 0], ['माफ़ कीजिए', 0], ['प्रिया ने ', 1], ['Weight loss, 5 ft 8 in', 0], ['Muscle gain, ', 0]]);
+    // A new member may be given the details of one who is there already, named in the same breath, even when the
+    // microphone heard the name a little wrong (कोशिश for कौशिक). All but the name, the number and the money is filled in
+    global.fetch = async () => Response.json({ steps: [{ type: 'model_output', content: [{ type: 'text', text: '{"name":"Rohit"}' }] }] });
+    const others = [{ ...member('k', 'Kaushik Tejwani', '9116398862', 0), gender: 'Male', age: 26, goal: 'Muscle gain', batch: 'Morning', months: 3, pt: true }, member('m', 'Rohit Mali', '9700001644', 0), member('n', 'Suresh Jain', '9700001645', 0), member('o', 'Suresh Mali', '9700001646', 0)];
+    const opening = (said) => ai.turn({ gym: shop.gym, form: {}, asked: 'name', said, members: others });
+    const like = await opening('एक नया मेंबर ऐड करो जिसका नाम रोहित रखो और उसमें सारी की सारी डिटेल्स कोशिश की ऐड कर दो');
+    assert.deepEqual([like.say, like.next, like.form], ['Kaushik Tejwani की डिटेल्स भर दी हैं। Rohit जी का मोबाइल नंबर बताइए।', 'phone',
+      { name: 'Rohit', height: '', goal: 'Muscle gain', health: '', batch: 'Morning', gender: 'Male', age: 26, weight: '', pt: true, diet: false, months: 3 }]);
+    assert.deepEqual([(await opening('नाम रोहित रखो और डिटेल्स सुरेश की डाल दो')).say, (await opening('नाम रोहित है')).say], // two Sureshes: nobody is picked
+      ['किसकी डिटेल्स भरनी हैं, यह समझ नहीं आया, इसलिए एक-एक करके पूछ रहा हूँ। Rohit जी का मोबाइल नंबर बताइए।', 'ठीक है। Rohit जी का मोबाइल नंबर बताइए।']);
     // 'Shall I?' is answered without the AI: a yes sends it, a no drops it, anything else is a new message. So are the
     // plain orders: money taken and a renewal, with 'which one?' and 'for how many months?' asked on the way
     global.fetch = () => { throw new Error('the AI is not asked'); };
