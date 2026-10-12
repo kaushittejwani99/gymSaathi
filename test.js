@@ -186,6 +186,13 @@ async function talkChecks() {
   assert.deepEqual([(await regTurn('months', 'do saal', { name: 'Aman', phone: '9829012345' })).form.months, (await regTurn('paid', 'aadha')).form.paid, (await regTurn('paid', 'aadha')).say.endsWith('सेव कर दूँ?'), (await regTurn('paid', 'cancel karo')).cancel,
     (await ai.chat({ question: 'haan save kar do', db: shop, today, confirming: true })).run, (await ai.chat({ question: 'cancel karo', db: shop, today, confirming: true })).no], [24, 1350, true, true, true, true]);
   assert.deepEqual([(await regTurn('batch', 'शाम को', { name: 'Aman', phone: '9829012345' })).form.batch, (await regTurn('goal', 'बॉडी बनानी है', { name: 'Aman', phone: '9829012345' })).form.goal], ['Evening', 'Muscle gain']);
+  // Ordinary answers are not misread: 'band kar di' inside an answer does not cancel, 'rehne do ji' is a no and a bare
+  // 'ji' a yes, money promised for tomorrow is not paid today. And the question itself, heard back from the
+  // loudspeaker, is nobody's answer
+  const begun = { name: 'Aman', phone: '9829012345' }, replied = async (asked, said, more = {}) => { const r = await ai.turn({ gym: shop.gym, form: asked === 'paid' ? full : begun, asked, said, ...more }); return r.cancel ? 'cancelled' : r.echo ? 'echo' : r.form[asked]; };
+  assert.deepEqual([await replied('health', 'पहले बीपी की दवाई चलती थी अब बंद कर दी'), await replied('pt', 'रहने दो जी'), await replied('diet', 'बाद में देखेंगे जी'), await replied('pt', 'जी'), await replied('pt', 'हाँ जी चाहिए'), await replied('paid', 'कल 500 दूंगा'),
+    await replied('paid', '500'), await replied('goal', 'cancel karo'), await replied('gender', 'पुरुष हैं या महिला', { spoken: true }), await replied('gender', 'महिला', { spoken: true }), await replied('batch', 'शाम को आएँगे', { spoken: true })],
+    ['पहले बीपी की दवाई चलती थी अब बंद कर दी', false, false, true, true, 0, 500, 'cancelled', 'echo', 'Female', 'Evening']);
   // With the AI on, a question about a member carries that member's whole record, however many members the gym has and
   // wherever in the list the member is. A question about the whole gym carries every member in short
   const big = { gym: { name: 'Big Gym' }, payments: [], members: [...Array.from({ length: 600 }, (x, i) => member(`m${i}`, `Member${i} Test`, `97${10000000 + i}`, 0)), { ...member('z', 'Dinesh Kumar', '9829055555', 2700), goal: 'Muscle gain' }] };

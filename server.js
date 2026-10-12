@@ -564,7 +564,7 @@ const gymRoutes = {
   // The assistant. Each is limited per gym, since every call may reach the AI.
   'POST /api/register/turn': async ({ body, account, gymId }) => {
     if (bucket(`ai ${gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot at once. Wait a minute and go on.');
-    return ai.turn({ gym: account.details, form: body.form && typeof body.form === 'object' ? body.form : {}, asked: G.str(body.asked, 20), said: G.str(body.said, 500), tries: Number(body.tries) || 0, members: (await loadGym(account)).members });
+    return ai.turn({ gym: account.details, form: body.form && typeof body.form === 'object' ? body.form : {}, asked: G.str(body.asked, 20), said: G.str(body.said, 500), tries: Number(body.tries) || 0, members: (await loadGym(account)).members, spoken: body.spoken === true });
   },
   'POST /api/chat': async ({ body, account, gymId }) => {
     const quick = body.quick === true;
