@@ -616,7 +616,7 @@ let hearing = null; // the speech recognition that is listening now
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 function stopVoice() {
-  if (hearing) hearing.abort();
+  if (hearing) try { hearing.abort(); } catch { /* it never started */ }
   if (window.speechSynthesis) speechSynthesis.cancel();
 }
 // Says the text aloud in Hindi. Resolves when it has been said, or at once where the browser has no voice.
@@ -635,26 +635,52 @@ function speak(text) {
 function listen() {
   return new Promise((resolve, reject) => {
     const rec = hearing = new Speech();
-    let text = '', why = 'no-speech';
+    let text = '', why = 'no-speech', over = false;
+    const end = () => {
+      if (over) return undefined;
+      over = true;
+      clearTimeout(stuck);
+      if (hearing === rec) hearing = null;
+      renderTalk();
+      return text.trim() ? resolve(text.trim()) : reject(Object.assign(new Error(why), { mic: true }));
+    };
+    // A browser that never reports the end of listening, or refuses to start, must not leave the mic dead until a reload.
+    const stuck = setTimeout(() => { try { rec.abort(); } catch { /* it never started */ } end(); }, 25000);
     Object.assign(rec, { lang: 'hi-IN', interimResults: true });
     rec.onresult = (e) => { text = [...e.results].map((r) => r[0].transcript).join(' '); const box = $('#boloInput'); if (box) box.value = text; };
     rec.onerror = (e) => { why = e.error; };
-    rec.onend = () => { hearing = null; renderTalk(); return text.trim() ? resolve(text.trim()) : reject(new Error(why)); };
-    rec.start();
+    rec.onend = end;
+    // Pressing the mic again stops the listening. Should the browser not answer the stop, the mic is freed all the same.
+    rec.halt = () => { try { rec.stop(); } catch { /* it never started */ } setTimeout(end, 1500); };
+    try { rec.start(); } catch (e) { why = e.name === 'NotAllowedError' ? 'not-allowed' : 'failed'; end(); }
     renderTalk();
   });
 }
+// Why the microphone did not hear, said to the owner in plain words. Silence after the assistant has spoken says nothing.
+const BLOCKED = 'माइक बंद है। ऊपर एड्रेस बार में ताले के निशान पर दबाइए, Microphone को Allow कीजिए, फिर माइक दबाइए। WhatsApp या किसी और ऐप के अंदर खुला है तो इसे Chrome में खोलिए।';
+const MIC = { 'not-allowed': BLOCKED, 'service-not-allowed': BLOCKED,
+  'audio-capture': 'माइक नहीं मिला। कोई और ऐप माइक इस्तेमाल कर रहा हो (कॉल, रिकॉर्डर) तो उसे बंद कीजिए, फिर माइक दबाइए।',
+  network: 'बोली समझने के लिए इंटरनेट चाहिए, और यह Chrome में चलता है। इंटरनेट देखिए, या GymSaathi को Chrome में खोलिए। तब तक लिख कर भेज सकते हैं।',
+  'language-not-supported': 'इस ब्राउज़र में हिंदी सुनना नहीं चलता। GymSaathi को Chrome में खोलिए। तब तक लिख कर भेज सकते हैं।',
+  failed: 'माइक शुरू नहीं हुआ। पेज को एक बार रीलोड कीजिए, फिर माइक दबाइए।' };
+let micNote = '';
 // After the assistant has spoken it listens for the answer by itself, so a registration needs no button between questions.
 // Each new thing the owner says or sends starts a new turn. Whatever the assistant was still saying for an older turn is
 // cut short, and that older turn no longer opens the microphone when it ends.
 let turn = 0;
 // Runs a part of the talk without making its button wait for the speaking to end: a new message can always be sent.
 const aside = (work) => { Promise.resolve(work).catch((e) => { console.error(e); toast(e.message, true); }); };
-async function listenNext() {
-  if (!Speech || current !== 'bolo' || hearing) return;
-  try { await heard(await listen()); } catch (e) {
-    if (e.message === 'not-allowed') toast('Allow the microphone for this site, then press the mic.', true);
+// `pressed` is the owner pressing the mic, who is told even that nothing was heard.
+async function listenNext(pressed) {
+  if (!Speech || current !== 'bolo' || hearing) return undefined;
+  micNote = '';
+  let said;
+  try { said = await listen(); } catch (e) {
+    micNote = MIC[e.message] || (pressed && e.message === 'no-speech' ? 'कुछ सुनाई नहीं दिया। माइक दबा कर फिर बोलिए।' : '');
+    if (MIC[e.message]) toast(micNote, true);
+    return renderTalk();
   }
+  return heard(said); // whatever goes wrong with the answer is shown like any other error, not swallowed here
 }
 async function says(text, more) {
   talk.push({ who: 'ai', text, ...more });
@@ -673,7 +699,7 @@ async function regTurn(said) {
     Object.assign(reg, { form: r.form, asked: r.next, tries: r.tries, done: r.done, fee: r.fee });
     thinking = false;
     await says(r.say);
-    if (mine === turn) listenNext(); // after the last question too: 'shall I save?' is answered aloud as well
+    if (mine === turn) aside(listenNext()); // after the last question too: 'shall I save?' is answered aloud as well
   } finally {
     thinking = false;
     renderTalk();
@@ -684,7 +710,7 @@ function greet() {
   stopVoice();
   reg = null;
   talk = [];
-  return says('नमस्ते! मैं आपका जिम साथी असिस्टेंट हूँ। मैं आपकी क्या मदद कर सकता हूँ? नया मेंबर जोड़ना हो या कुछ पूछना हो, बस बोलिए।', { hello: true }).then(((mine) => () => { if (mine === turn) listenNext(); })(++turn));
+  return says('नमस्ते! मैं आपका जिम साथी असिस्टेंट हूँ। मैं आपकी क्या मदद कर सकता हूँ? नया मेंबर जोड़ना हो या कुछ पूछना हो, बस बोलिए।', { hello: true }).then(((mine) => () => { if (mine === turn) aside(listenNext()); })(++turn));
 }
 const ASKS = ['नया मेंबर जोड़ो', 'किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'];
 const askChips = () => ASKS.map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('');
@@ -740,7 +766,7 @@ async function heard(text) {
     if (done) return await says(done);
     if (r.start === 'register') return startReg();
     await says(r.answer, { pending: r.pending, remind: r.remind, page: r.page });
-    if (r.pending && mine === turn) listenNext(); // it asked 'shall I?' and now listens for the yes
+    if (r.pending && mine === turn) aside(listenNext()); // it asked 'shall I?' and now listens for the yes
     return undefined;
   } finally {
     thinking = false;
@@ -798,7 +824,7 @@ function renderTalk() {
   const mic = $('#boloMic');
   if (mic) { mic.hidden = !Speech; if (hearing) mic.setAttribute('aria-pressed', 'true'); else mic.removeAttribute('aria-pressed'); }
   const state = $('#boloState');
-  if (state) state.textContent = hearing ? 'Listening… speak now' : reg && !reg.done ? 'Registering a new member' : '';
+  if (state) state.textContent = hearing ? 'Listening… speak now' : micNote || (reg && !reg.done ? 'Registering a new member' : '');
 }
 
 views.bolo = (id, q) => {
@@ -829,10 +855,10 @@ Object.assign(actions, {
     await says(`${m.name} जी जुड़ गए।${G.due(m) ? ` ${Math.round(G.due(m))} रुपये बाकी हैं, उनका रिमाइंडर रोज़ डैशबोर्ड पर मिलेगा।` : ''} व्हाट्सऐप पर स्वागत संदेश भेज दीजिए।`, { welcome: m.id });
   },
   'bolo-mic'() {
-    if (hearing) return hearing.stop();
+    if (hearing) return hearing.halt();
     if (window.speechSynthesis) speechSynthesis.cancel(); // pressing the mic while it speaks: it stops and listens
     turn++;
-    return aside(listenNext());
+    return aside(listenNext(true));
   },
   'bolo-send'(form) { stopVoice(); aside(heard(form.said.value)); },
   'bolo-ask'(el) { stopVoice(); aside(heard(el.textContent)); },
