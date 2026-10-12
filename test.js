@@ -121,6 +121,15 @@ async function talkChecks() {
   const nothingWaits = 'अभी कोई काम "हाँ" के लिए रुका नहीं है। जो करना है, वह फिर से बोलिए।';
   assert.deepEqual([await got('rohit lodha ko delete kar do', shallI, waiting), await got('हाँ हटा दो', shallI, waiting), await got('haan ji kar dijiye', shallI, waiting), ['run', 'no'].includes(await got('theek se number batao', shallI, waiting)),
     await got('हाँ, कर दो'), await got('save kar do'), await got('theek hai ji')], ['delete r2', 'run', 'run', false, nothingWaits, nothingWaits, 'ठीक है। और कुछ पूछना हो तो बताइए।']);
+  // The verb of the question, said back, is a yes to that question and to no other. Noise while a 'shall I?' waits
+  // leaves it waiting. An 'ok' after a question that was dropped is told that nothing waits; after one that was
+  // carried out it is only an 'ok'
+  const kept = async (question, kind) => { const r = await ai.chat({ question, db: club, today, history: shallI, confirming: kind }); return r.run ? 'run' : r.no ? 'no' : r.keep ? 'kept' : r.pending ? `${r.pending.do} ${r.pending.id}` : 'other'; };
+  assert.deepEqual([await kept('हटा दो', 'delete'), await kept('hata do', 'delete'), await kept('सेव', 'save'), await kept('haan jama kar do', 'pay'), await kept('जमा कर दो', 'delete'), await kept('सहमत हूँ', 'delete'), await kept('मत करो', 'delete'),
+    await kept('अच्छा', 'delete'), await kept('hmm', 'delete'), await kept('अरे भाई वो डंबल उधर रख दे', 'delete'), await kept('को जिम से हटा दूं 30 दिन तक', 'delete')],
+    ['run', 'run', 'run', 'run', 'pay rn', 'kept', 'no', 'kept', 'kept', 'kept', 'kept']);
+  const moved = [...shallI, { who: 'me', text: 'priya ka hisaab' }, { who: 'ai', text: 'Priya Jain की मेंबरशिप 31 Oct 2026 तक है, और ₹400 बाकी है।' }], carried = [...shallI, { who: 'me', text: 'हाँ' }, { who: 'ai', text: 'Rohit को हटा दिया। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।' }];
+  assert.deepEqual([await got('हाँ', moved), await got('ठीक है', moved), await got('ठीक है', carried), await got('ok')], [nothingWaits, nothingWaits, 'ठीक है। और कुछ पूछना हो तो बताइए।', 'ठीक है। और कुछ पूछना हो तो बताइए।']);
   // Money is taken on an order, or on being told who paid in that very sentence (or by 'usne'). A piece of the
   // assistant's own sentence, a 'diya' beside any number, and what was paid another day are not money received
   const aboutPriya = [{ who: 'me', text: 'priya ka hisaab' }, { who: 'ai', text: 'Priya Jain की मेंबरशिप 31 Oct 2026 तक है, और ₹400 बाकी है।' }];

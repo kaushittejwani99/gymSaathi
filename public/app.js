@@ -632,7 +632,9 @@ actions['pay-month'] = (el) => { F.month = el.value; $('#list').innerHTML = paym
 
 let talk = [];      // { who: 'ai' | 'me', text, welcome: memberId }
 let reg = null;     // the registration in progress: { form, asked, tries, done, fee }
-let thinking = false;
+let thinking = 0;    // the turn whose answer is being waited for, or 0. Only that turn ends the waiting: an older one,
+                     // cut short by the next message, must not switch the dots off under a request still on its way
+const rested = (mine) => { if (thinking === mine) thinking = 0; };
 let hearing = null; // the speech recognition that is listening now
 // The browser's own speech recognition and voice (Chrome, Edge, Android). Without them the owner types and reads.
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -743,26 +745,26 @@ async function says(text, more) {
 
 async function regTurn(said) {
   const mine = ++turn;
-  thinking = true;
+  thinking = mine;
   renderTalk();
   try {
     let r;
     try { r = await api('POST', '/api/register/turn', { form: reg.form, asked: reg.asked, said, tries: reg.tries }); } catch (e) {
       if (e.status === 401 || e.status === 402) throw e;
       // Nothing is lost: the form is as it was, and the same question waits for the same answer.
-      thinking = false;
+      rested(mine);
       await says(noAnswer(e, 'अपना जवाब फिर से बोलिए।'));
       if (mine === turn) aside(listenNext(false, mine));
       return undefined;
     }
-    if (r.setup) { reg = null; thinking = false; return await says(r.say, { settings: true }); } // the gym has no prices yet
-    if (r.cancel) { reg = null; thinking = false; return await says(r.say); } // 'cancel karo', said part of the way through
+    if (r.setup) { reg = null; rested(mine); return await says(r.say, { settings: true }); } // the gym has no prices yet
+    if (r.cancel) { reg = null; rested(mine); return await says(r.say); } // 'cancel karo', said part of the way through
     Object.assign(reg, { form: r.form, asked: r.next, tries: r.tries, done: r.done, fee: r.fee });
-    thinking = false;
+    rested(mine);
     await says(r.say);
     if (mine === turn) aside(listenNext(false, mine)); // after the last question too: 'shall I save?' is answered aloud as well
   } finally {
-    thinking = false;
+    rested(mine);
     renderTalk();
   }
 }
@@ -815,17 +817,17 @@ async function heard(text, spoken) {
   if (asked) delete talk.at(-1).pending;
   talk.push({ who: 'me', text });
   if (reg && !reg.done) return regTurn(text);
-  thinking = true;
+  thinking = mine;
   renderTalk();
   try {
     // The last few turns go along, so 'kab khatam hogi?' after a question about Meena is understood to be about her.
-    const filled = !!(reg && reg.done);
+    const filled = !asked && !!(reg && reg.done); // a yes or a no answers what was asked last
     let r, done = '';
-    try { r = await api('POST', '/api/chat', { question: text, spoken: !!spoken, confirming: !!asked || filled, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) }); } catch (e) {
+    try { r = await api('POST', '/api/chat', { question: text, spoken: !!spoken, confirming: asked ? asked.do : filled ? 'save' : false, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) }); } catch (e) {
       if (e.status === 401 || e.status === 402) throw e;
       // No answer came, so nothing was changed. It is said in the talk, where the owner is looking, and a 'shall I?'
       // that was waiting for this reply waits again, with its buttons.
-      thinking = false;
+      rested(mine);
       return await says(noAnswer(e, asked ? 'कुछ बदला नहीं है। फिर से "हाँ, कर दो" दबाइए।' : 'फिर से बोलिए।'), { pending: asked });
     }
     if (r.echo) {
@@ -833,7 +835,7 @@ async function heard(text, spoken) {
       // waiting for a yes waits again, and the microphone listens on.
       talk.pop();
       if (asked && talk.at(-1)) talk.at(-1).pending = asked;
-      thinking = false;
+      rested(mine);
       renderTalk();
       if (mine === turn) aside(listenNext(false, mine));
       return undefined;
@@ -841,14 +843,14 @@ async function heard(text, spoken) {
     if (r.run && asked) {
       try { done = await carryOut(asked); } catch (e) {
         if (e.status === 401 || e.status === 402) throw e;
-        thinking = false;
+        rested(mine);
         // The server said no and why (then nothing was changed), or it did not answer (then nobody knows yet).
         if (e.status && e.status < 500) return await says(`यह नहीं हो पाया, कुछ बदला नहीं है। कारण: ${e.message}`);
         await refresh().catch(() => {});
         return await says('सर्वर से जवाब नहीं आया, इसलिए पक्का नहीं कि यह हुआ या नहीं। एक बार Members में देख लीजिए; न हुआ हो तो फिर से बोलिए।');
       }
     }
-    thinking = false;
+    rested(mine);
     // The filled form waits for a yes as well: 'haan, save kar do' saves the member, a no drops the form.
     if (filled && r.run) {
       try { return await actions['reg-save'](); } catch (e) {
@@ -859,11 +861,13 @@ async function heard(text, spoken) {
     if (filled && r.no) return await actions['reg-cancel']();
     if (done) return await says(done);
     if (r.start === 'register') return startReg();
-    await says(r.answer, { pending: r.pending, remind: r.remind, page: r.page });
-    if (r.pending && mine === turn) aside(listenNext(false, mine)); // it asked 'shall I?' and now listens for the yes
+    // `keep`: what was said was neither a yes nor a no nor anything else (a cough, the gym, 'hmm'): the question still waits.
+    const waits = r.pending || (r.keep ? asked : undefined);
+    await says(r.answer, { pending: waits, remind: r.remind, page: r.page });
+    if (waits && mine === turn) aside(listenNext(false, mine)); // it asked 'shall I?' and now listens for the yes
     return undefined;
   } finally {
-    thinking = false;
+    rested(mine);
     renderTalk();
   }
 }
@@ -874,17 +878,17 @@ const noAnswer = (e, next) => (e.status === 429 ? `एक मिनट में
 async function carryOut({ do: what, id, body }) {
   if (what === 'payall') {
     const all = await api('POST', '/api/members/pay', body);
-    await refresh();
+    await refresh().catch(() => {}); // the change is made; the version check reads the gym again anyway
     return `${all.paid} मेंबर की फीस जमा हो गई, कुल ${G.money(all.total)}।`;
   }
   if (what === 'delete') {
     const gone = byId(S.members, id) || { name: 'मेंबर' };
     await api('DELETE', `/api/members/${id}`);
-    await refresh();
+    await refresh().catch(() => {}); // the change is made; the version check reads the gym again anyway
     return `${gone.name} को हटा दिया। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।`;
   }
   const m = await api(what === 'edit' ? 'PUT' : 'POST', `/api/members/${id}${what === 'edit' ? '' : `/${what}`}`, body);
-  await refresh();
+  await refresh().catch(() => {});
   const owed = G.due(m) ? `अब ${G.money(G.due(m))} बाकी हैं।` : 'अब कोई फीस बाकी नहीं है।';
   return what === 'pay' ? `${m.name} के ${G.money(body.amount)} जमा हो गए। ${owed}`
     : what === 'renew' ? `${m.name} की मेंबरशिप ${G.fmtDate(m.end)} तक रिन्यू हो गई। ${owed}` : `${m.name} की जानकारी बदल दी गई।`;
@@ -942,9 +946,11 @@ views.bolo = (id, q) => {
 
 Object.assign(actions, {
   'reg-start'() { stopVoice(); talk = []; aside(startReg()); },
-  'reg-cancel'() { stopVoice(); reg = null; talk.push({ who: 'ai', text: 'ठीक है, रद्द कर दिया।' }); renderTalk(); },
+  'reg-cancel'() { stopVoice(); turn++; reg = null; delete (talk.at(-1) || {}).pending; talk.push({ who: 'ai', text: 'ठीक है, रद्द कर दिया।' }); renderTalk(); },
   'reg-edit'() { openDialog(dialogForm('New member', 'member-save', '', memberForm({ ...reg.form, fee: reg.fee }, true), 'Save member')); },
   async 'reg-save'() {
+    stopVoice(); // the microphone that waited for a spoken yes must not stay open while the assistant speaks
+    turn++;
     const f = reg.form, m = await api('POST', '/api/members', { ...f, fee: reg.fee, mode: 'Cash' });
     reg = null;
     await refresh();

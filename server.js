@@ -569,7 +569,7 @@ const gymRoutes = {
   'POST /api/chat': async ({ body, account, gymId }) => {
     const quick = body.quick === true;
     if (!quick && bucket(`ai ${gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot of questions. Wait a minute and ask again.');
-    return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), quick, history: body.history, confirming: body.confirming === true, spoken: body.spoken === true });
+    return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), quick, history: body.history, confirming: typeof body.confirming === 'string' ? G.str(body.confirming, 12) || true : body.confirming === true, spoken: body.spoken === true });
   },
 
   // Old records, step one: the AI reads a photo, a PDF or a spreadsheet into rows. Nothing is saved, and the file is not kept.
