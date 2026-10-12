@@ -85,6 +85,16 @@ async function talkChecks() {
   // A question may ask for a detail of the member: the sentence gives it, or says that it is not written down
   db.members[3].goal = 'Weight loss';
   assert.deepEqual([(await fresh('priya ka goal kya h?'))[0], (await fresh('priya ki umar kitni hai'))[0], (await fresh('priya ka goal kya h?')).length], ['Priya Jain का लक्ष्य: Weight loss।', 'Priya Jain की उम्र: लिखा नहीं है।', 7]);
+  // Twenty-one Rohits, one of them Rohit bacchan, who is past the fifteen that a list has room for. His full name finds
+  // him at once, said in Hindi or typed with another spelling. Asked for by the first name alone, 'which one?' is
+  // settled by his number: all of it, part of it, with a space in it. A number nobody has is said to be nobody's
+  const crowd = { gym: { name: 'Fit Zone' }, payments: [], members: [...Array.from({ length: 20 }, (x, i) => member(`r${i}`, `Rohit ${['Mali', 'Lodha', 'Pareek', 'Tiwari'][i % 4]}`, `97000${String(10000 + i * 3425).slice(0, 5)}`, 0)), member('rb', 'Rohit bacchan', '9223642960', 0)] };
+  const among = async (question, history = []) => { const lines = (await ai.chat({ question, db: crowd, today, history })).answer.split('\n'); return lines[2] === '- मोबाइल: 9223642960' ? 'Rohit bacchan' : lines[0]; };
+  const whichRohit = [{ who: 'me', text: 'rohit ki fees kitni baaki hai' }, { who: 'ai', text: (await ai.chat({ question: 'rohit ki fees kitni baaki hai', db: crowd, today })).answer }];
+  assert.deepEqual([await among('रोहित बच्चन की फीस कितनी बकाया है'), await among('rohit bachchan ka hisaab'), await among('rohit bachan ki fees'), whichRohit[1].text.split('\n')[0], whichRohit[1].text.includes('9223642960'),
+    await among('9223 64296', whichRohit), await among('2960', whichRohit), await among('बच्चन', whichRohit), await among('92236 42960'), await among('64296'), await among('88888 11111', whichRohit), await among('55555')],
+    ['Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan', 'इस नाम के 21 मेंबर हैं। किसकी बात कर रहे हैं? मोबाइल नंबर बताइए।', false, 'Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan',
+      'इस नंबर का कोई मेंबर नहीं मिला। नंबर एक बार फिर देखकर बताइए, या पूरा नाम बोलिए।', 'इस नंबर का कोई मेंबर नहीं मिला। नंबर एक बार फिर देखकर बताइए, या पूरा नाम बोलिए।']);
   // What an owner may say, and what each gets without the AI: how the answer begins, and what comes with it (the number
   // of lines, a change to say yes to, a reminder to send, or a page to open)
   const shop = { gym: { name: 'Fit Zone', price1: 1000, price3: 2700, ptPrice: 2000, timings: '6 से 10' }, payments: [{ amount: 1000, date: today, mode: 'Cash' }, { amount: 600, date: '2026-10-10', mode: 'UPI' }, { amount: 900, date: '2026-09-20', mode: 'Cash' }],
@@ -343,6 +353,25 @@ async function apiChecks() {
       await ok(gym('POST', '/api/members/pay', { ids: [rahulId] }))], [{ paid: 0, total: 0 }, 400, { paid: 1, total: 3700 }, '₹0', { paid: 0, total: 0 }]);
     await ok(gym('DELETE', `/api/payments/${(await ok(gym('GET', '/api/data'))).payments.find((p) => p.amount === 3700 && p.mode === 'UPI').id}`));
     assert.equal(await dues(), '₹3,700');
+    // The database changed by another hand (in Atlas itself, by a script): the watch reports it, what was kept of that
+    // gym is forgotten, and its open pages are told to read again. A report of what the app itself has just written
+    // changes nothing more. The watch is played here: the reports are given by hand
+    let report = null;
+    const realWatch = db.watch, realKind = db.usingMongo;
+    Object.assign(db, { usingMongo: true, watch: async (seen) => { report = seen; } });
+    require('./server').follow();
+    Object.assign(db, { usingMongo: realKind, watch: realWatch });
+    const watched = (await listed('fit.zone')).id, v0 = await version(gym), w0 = await version(other);
+    report({ name: 'transactions', gymId: watched }); // the app wrote to this gym a moment ago: its own doing
+    assert.equal(await version(gym), v0);
+    await new Promise((done) => setTimeout(done, 5100));
+    await db.insert('transactions', { _id: 'byhand0000000001', gymId: watched, customerId: rahulId, membershipId: (await ok(gym('GET', `/api/data`))).members.find((m) => m.id === rahulId).membershipId, name: 'Rahul Sharma', amount: 200, mode: 'Cash', date: today, createdAt: new Date().toISOString() });
+    const stale = await dues();
+    report({ name: 'transactions', gymId: watched });
+    assert.deepEqual([stale, await dues(), await version(gym) - v0, await version(other) - w0], ['₹3,700', '₹3,500', 1, 0]);
+    await db.remove('transactions', { _id: 'byhand0000000001' });
+    report({ name: 'transactions' }); // a deletion does not say whose it was: every gym reads again
+    assert.deepEqual([await dues(), await version(gym) - v0, await version(other) - w0], ['₹3,700', 2, 1]);
 
     // With a Gemini key one spoken sentence can fill several answers. The call to Google is stubbed.
     const realFetch = global.fetch;

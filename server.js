@@ -202,7 +202,7 @@ async function memberById(gymId, id) {
 // Everything of one gym.
 async function loadGym(account) {
   // The three reads below are what every page of a gym needs, so their answer is kept until the gym changes something.
-  const own = await cache.through(`records:${account._id}`, CACHE_SECONDS,
+  const own = await cache.through(`records:${account._id}`, keepFor,
     () => Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id }))));
   const shown = account.sample ? sample.records(account._id, G.todayISO()) : { customers: [], memberships: [], transactions: [] };
   const all = [...shown.customers, ...own[0]], periods = [...shown.memberships, ...own[1]], everyPaid = [...shown.transactions, ...own[2]];
@@ -381,7 +381,7 @@ const open = {
 // The owner of the service saves under 'owner', also while a gym is open; a gym saves under its own id.
 const saver = (c) => (c.admin ? 'owner' : c.gymId);
 async function exportsOf(who, hasData) {
-  const kept = (await cache.through(`exports:${who}`, CACHE_SECONDS, () => db.find('exports', { gymId: who }))).sort((a, b) => (a.at < b.at) - (a.at > b.at));
+  const kept = (await cache.through(`exports:${who}`, keepFor, () => db.find('exports', { gymId: who }))).sort((a, b) => (a.at < b.at) - (a.at > b.at));
   const due = hasData && (!kept.length || Date.now() - Date.parse(kept[0].at) > EXPORT_DAYS * 864e5);
   return { exports: kept.slice(0, 5).map(({ at, file, place, device }) => ({ at, file, place, device })), exportDue: due, exportDays: EXPORT_DAYS };
 }
@@ -392,17 +392,41 @@ async function exportsOf(who, hasData) {
 // phone, on any page or through the assistant, shows on the computer without a reload.
 // ponytail: counted in this process, like the write queue, so run one copy of the server.
 const changes = new Map();
+let elsewhere = 0; // changes that could not be put to one gym: they count for every gym
+const versionOf = (gymId) => (changes.get(gymId || 'all') || 0) + elsewhere;
+const wrote = new Map(); // gym id, and 'all' -> when this server last changed something there
+const mark = (gymId) => { for (const k of ['all', gymId]) if (k) wrote.set(k, Date.now()); };
+
+// What is changed in the database by other hands (in Atlas itself, by a script, by restore.js) is followed too: what
+// was kept of that gym is forgotten at once and its open pages are told to read again. A change this server made
+// itself has done all that already, and is known by having happened within the last few seconds.
+// ponytail: a hand-made change to a gym within 5 seconds of the app changing the same gym waits for the next page change.
+let keepFor = CACHE_SECONDS;
+function follow() {
+  if (!db.usingMongo) return;
+  db.watch(({ name, gymId }) => {
+    keepFor = CACHE_SECONDS;
+    if (Date.now() - (wrote.get(gymId || 'all') || 0) < 5000) return;
+    if (name === 'gyms' || name === 'sessions') forget(gymId);
+    if (gymId) { cache.drop(`records:${gymId}`, `exports:${gymId}`); for (const k of ['all', gymId]) changes.set(k, (changes.get(k) || 0) + 1); } else { cache.clear(); elsewhere++; }
+  }, (e) => {
+    // Without the watch nothing is kept for long, so such a change still shows within half a minute.
+    if (keepFor !== 30) console.error('The database cannot be watched, so what is read from it is kept for 30 seconds only:', e.message);
+    keepFor = 30;
+    setTimeout(follow, 60e3).unref();
+  }).catch((e) => console.error('The database cannot be watched:', e.message));
+}
 const QUIET = new Set(['POST /api/chat', 'POST /api/register/turn', 'POST /api/import/read']); // these change nothing
 
 const either = {
-  'GET /api/version': async ({ gymId }) => ({ n: changes.get(gymId || 'all') || 0 }),
+  'GET /api/version': async ({ gymId }) => ({ n: versionOf(gymId) }),
   'POST /api/exports': async (c) => {
     await db.insert('exports', { _id: newId(), gymId: saver(c), at: stamp(), file: required(c.body.file, 'The file name', 150), place: G.str(c.body.place, 150) || 'Downloads folder', device: G.str(c.body.device, 100) });
     await cache.drop(`exports:${saver(c)}`);
     return exportsOf(saver(c), true);
   },
   'GET /api/data': async ({ admin, account, gymId }) => {
-    const version = changes.get(gymId || 'all') || 0; // read before the records, so a change during the read is asked about again
+    const version = versionOf(gymId); // read before the records, so a change during the read is asked about again
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
     // A backup is asked for only where there is something to keep: a gym for the owner, a member for a gym.
     const data = account && await loadGym(account);
@@ -701,8 +725,10 @@ async function api(req, res, url) {
     c.gymId = c.account && c.account._id;
   }
   c.body = req.method === 'GET' ? {} : await readJsonBody(req, key === 'POST /api/import/read' ? MAX_FILE : MAX_BODY);
+  const changing = req.method !== 'GET' && !QUIET.has(key);
+  if (changing) mark(c.gymId);
   const out = await route(c);
-  if (req.method !== 'GET' && !QUIET.has(key)) for (const k of ['all', c.gymId]) if (k) changes.set(k, (changes.get(k) || 0) + 1);
+  if (changing) { mark(c.gymId); for (const k of ['all', c.gymId]) if (k) changes.set(k, (changes.get(k) || 0) + 1); }
   if (!res.headersSent) json(res, 200, out || { ok: true });
 }
 
@@ -724,6 +750,7 @@ function serveStatic(req, res, pathname) {
 
 async function start(port) {
   await db.ready; // a wrong MONGODB_URI stops the server here, with the reason, instead of failing every request
+  follow();
   if (!adminEmail() || (process.env.ADMIN_PASSWORD || '').length < 8) console.log('Set ADMIN_EMAIL and ADMIN_PASSWORD (8 characters or more): without them nobody can create gym logins.');
   const server = http.createServer((req, res) => {
     Promise.resolve().then(() => {
@@ -740,7 +767,7 @@ async function start(port) {
   return new Promise((resolve, reject) => { server.once('error', reject).listen(port, () => resolve(server)); });
 }
 
-module.exports = { start, runReminders, daily, forget };
+module.exports = { start, runReminders, daily, forget, follow };
 
 if (require.main === module) {
   start(Number(process.env.PORT) || 3000).then(
