@@ -35,6 +35,10 @@ const fail = (status, message) => { throw Object.assign(new Error(message), { ht
 const newId = () => crypto.randomBytes(8).toString('hex');
 const stamp = () => new Date().toISOString();
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+// A mark of the app as the browser gets it, made from its own files. It is written into the page and told with every
+// version check: a page that was left open while the server was updated sees the mark change and loads itself afresh,
+// instead of going on with old code that asks the new server for things in the old way (and is told "Not found.").
+const BUILD = sha256(['public/index.html', 'public/app.js', 'public/styles.css', 'lib/core.js'].map((f) => fs.readFileSync(path.join(__dirname, f), 'utf8')).join('\n')).slice(0, 12);
 const same = (a, b) => crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const sum = (list, key) => list.reduce((s, x) => s + x[key], 0);
 const live = (x) => !x.deletedAt; // a deleted member or gym stays in the store, marked, until it is cleared out
@@ -419,7 +423,7 @@ function follow() {
 const QUIET = new Set(['POST /api/chat', 'POST /api/register/turn', 'POST /api/import/read']); // these change nothing
 
 const either = {
-  'GET /api/version': async ({ gymId }) => ({ n: versionOf(gymId) }),
+  'GET /api/version': async ({ gymId }) => ({ n: versionOf(gymId), build: BUILD }),
   'POST /api/exports': async (c) => {
     await db.insert('exports', { _id: newId(), gymId: saver(c), at: stamp(), file: required(c.body.file, 'The file name', 150), place: G.str(c.body.place, 150) || 'Downloads folder', device: G.str(c.body.device, 100) });
     await cache.drop(`exports:${saver(c)}`);
@@ -565,7 +569,7 @@ const gymRoutes = {
   'POST /api/chat': async ({ body, account, gymId }) => {
     const quick = body.quick === true;
     if (!quick && bucket(`ai ${gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot of questions. Wait a minute and ask again.');
-    return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), quick, history: body.history, confirming: body.confirming === true });
+    return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), quick, history: body.history, confirming: body.confirming === true, spoken: body.spoken === true });
   },
 
   // Old records, step one: the AI reads a photo, a PDF or a spreadsheet into rows. Nothing is saved, and the file is not kept.
@@ -743,6 +747,7 @@ function serveStatic(req, res, pathname) {
   let body = null;
   try {
     if (type && inside && ['GET', 'HEAD'].includes(req.method) && fs.statSync(file).isFile()) body = fs.readFileSync(file);
+    if (body && pathname === '/') body = Buffer.from(String(body).replace('__BUILD__', BUILD));
   } catch { /* no such file: 404 below */ }
   if (body === null) return send(res, 404, 'text/plain; charset=utf-8', 'Not found');
   return send(res, 200, type, body, { 'Cache-Control': 'no-cache', ...(type.startsWith('text/html') && { 'Content-Security-Policy': CSP }) });

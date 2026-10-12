@@ -116,6 +116,28 @@ async function talkChecks() {
   assert.deepEqual([await got('हां कर दो', shallI, waiting), await got('ठीक है', shallI, waiting), await got('कर दीजिए', shallI, waiting), await got('haan ji', shallI, waiting), await got('नहीं रहने दो', shallI, waiting), await got('cancel karo', shallI, waiting),
     await got('जी का फॉर्म तैयार है एक बार देख लीजिए सेव कर दूं', shallI, waiting), await got('सेव कर दूं', shallI, waiting), ['run', 'no'].includes(await got('राहुल जी की फीस कितनी बाकी है ज़रा ठीक से बताओ', shallI, waiting))],
     ['run', 'run', 'run', 'run', 'no', 'no', again, again, false]);
+  // A yes is the whole message. Another order given while a deletion waits is that other order, not a yes to the first;
+  // and a go-ahead when nothing waits is told so
+  const nothingWaits = 'अभी कोई काम "हाँ" के लिए रुका नहीं है। जो करना है, वह फिर से बोलिए।';
+  assert.deepEqual([await got('rohit lodha ko delete kar do', shallI, waiting), await got('हाँ हटा दो', shallI, waiting), await got('haan ji kar dijiye', shallI, waiting), ['run', 'no'].includes(await got('theek se number batao', shallI, waiting)),
+    await got('हाँ, कर दो'), await got('save kar do'), await got('theek hai ji')], ['delete r2', 'run', 'run', false, nothingWaits, nothingWaits, 'ठीक है। और कुछ पूछना हो तो बताइए।']);
+  // Money is taken on an order, or on being told who paid in that very sentence (or by 'usne'). A piece of the
+  // assistant's own sentence, a 'diya' beside any number, and what was paid another day are not money received
+  const aboutPriya = [{ who: 'me', text: 'priya ka hisaab' }, { who: 'ai', text: 'Priya Jain की मेंबरशिप 31 Oct 2026 तक है, और ₹400 बाकी है।' }];
+  assert.deepEqual([await got('priya ne 200 diye'), await got('priya ki fees jama ho gayi'), await got('usne 200 de diye', aboutPriya), await got('fees jama kar do', aboutPriya), await got('priya se 300 mile')], ['pay p', 'pay p', 'pay p', 'pay p', 'pay p']);
+  for (const said of ['जमा हो गए', 'के 200 जमा हो गए', 'jama ho gaye', 'priya ka weight 62 kar diya', 'priya ko 3 mahine ka plan diya', 'priya ne kal 200 diye the', 'usne fees de di thi'])
+    assert.equal((await ai.chat({ question: said, db: club, today, history: aboutPriya })).pending, undefined, said);
+  // The assistant's own sentence, brought back whole by the microphone, is known by its sound (the phone writes the name
+  // in Hindi) and dropped. Typed, the same words are the owner's
+  const paidPart = [{ who: 'me', text: 'priya ne 200 diye' }, { who: 'ai', text: 'Priya Jain के ₹200 जमा हो गए। अब ₹200 बाकी हैं।' }], heardBack = 'प्रिया जैन के 200 रुपये जमा हो गए अब 200 बाकी हैं';
+  assert.deepEqual([(await ai.chat({ question: heardBack, db: club, today, history: paidPart, spoken: true })).echo, (await ai.chat({ question: heardBack, db: club, today, history: paidPart })).echo, (await ai.chat({ question: 'शाम को', db: club, today, history: [{ who: 'ai', text: 'ठीक है। सुबह आएँगे या शाम को?' }], spoken: true })).echo,
+    (await ai.chat({ question: 'नया मेंबर जोड़ना हो या कुछ पूछना हो बस बोलिए', db: club, today })).start, (await ai.chat({ question: 'नया मेंबर जोड़ो', db: club, today })).start], [true, undefined, undefined, undefined, 'register']);
+  // Once somebody has been deleted the talk is not gone back through past them: 'fees jama kar do' said next is not
+  // about whoever was spoken of before
+  const afterPriya = { ...club, members: club.members.filter((m) => m.id !== 'p'), deleted: [...club.deleted, { id: 'p', name: 'Priya Jain', phone: '9829044444', deletedAt: '2026-10-12T06:00:00.000Z' }] };
+  const longTalk = [{ who: 'me', text: '9922233355 ka hisaab' }, { who: 'ai', text: 'Rohit की मेंबरशिप 31 Oct 2026 तक है, और ₹400 बाकी है।\n- मोबाइल: 9922233355' }, { who: 'me', text: 'priya ko hata do' }, { who: 'ai', text: 'Priya Jain (9829044444) को जिम से हटा दूँ?' }, { who: 'me', text: 'हाँ' }, { who: 'ai', text: 'Priya Jain को हटा दिया। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।' }];
+  for (const said of ['fees jama kar do', 'हटा दो', 'ise 3 mahine renew kar do']) assert.equal((await ai.chat({ question: said, db: afterPriya, today, history: longTalk })).pending, undefined, said);
+  assert.equal((await ai.chat({ question: 'हटा दिया', db: afterPriya, today, history: longTalk })).answer, 'Priya Jain को हटाया जा चुका है। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।');
   // The owner's own spelling of the verbs is read ('kerdo', 'krdo', 'hatado'). A mobile number is changed for the member
   // who is NAMED, whoever has that number now: the same number again, a number that is another member's, and one that is
   // no mobile number are each said so, instead of 'I did not understand'
@@ -381,6 +403,10 @@ async function apiChecks() {
     const lower = await dues();
     await ok(gym('DELETE', `/api/payments/${(await ok(gym('GET', '/api/data'))).payments.find((p) => p.amount === 700 && p.mode === 'UPI').id}`));
     assert.deepEqual([before, lower, await dues(), (await ok(gym('POST', '/api/chat', { question: 'हाँ, कर दो', confirming: true }))).run], ['₹3,700', '₹3,000', '₹3,700', true]);
+    // The page carries a mark of the app it was built from, and the version check tells the server's: a page left open over
+    // an update sees them differ and loads itself afresh
+    const page = String((await nobody('GET', '/', undefined, true))[1]), stamped = (/<meta name="build" content="([a-f0-9]{12})">/.exec(page) || [])[1];
+    assert.deepEqual([!!stamped, (await ok(gym('GET', '/api/version'))).build === stamped, page.includes('__BUILD__')], [true, true, false]);
     // Open pages follow a number that moves with every change to their own gym, and with nothing else
     const version = async (as) => (await ok(as('GET', '/api/version'))).n, [mine, theirs, everyones] = [await version(gym), await version(other), await version(owner)];
     await ok(gym('POST', '/api/chat', { question: 'rahul ka hisaab', quick: true }));

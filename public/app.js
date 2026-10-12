@@ -201,15 +201,24 @@ const calm = () => !dlg.open && !picked.size && !main.querySelector('input:focus
 // Every few seconds the page asks the server one small thing: has anything changed since I last looked? When it has,
 // on another phone or computer, on any page or through the assistant, this page reads it and shows it.
 // What was read carries the number it was read at (S.version), so nothing that happens in between is missed.
+// The same check tells of a newer app on the server. This page was built from the older one, and going on with it
+// would ask the server for things in the old way. So it loads itself afresh: at once when nothing is going on, and
+// otherwise at the next change of page.
+const BUILD = (document.querySelector('meta[name="build"]') || {}).content || '';
+let outdated = false;
+const idle = () => calm() && !thinking && !hearing && !(reg && !reg.done) && !(window.speechSynthesis && speechSynthesis.speaking);
 setInterval(async () => {
   if (!S || document.hidden) return;
   const now = await ask('GET', '/api/version').catch(() => null);
+  if (now && now.build && BUILD && BUILD !== '__BUILD__' && now.build !== BUILD) outdated = true;
+  if (outdated && idle()) return location.reload();
   if (!now || !S || now.n === S.version) return;
   if (S.gym) recheck();
   else if (current === 'accounts' && calm()) { S.version = now.n; loadAccounts().catch(() => {}); }
 }, 8000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) recheck(); });
 window.addEventListener('hashchange', () => {
+  if (outdated) return location.reload(); // a newer app is on the server: this is the moment to take it
   if (dlg.open) dlg.close();
   if (!location.hash.startsWith('#/bolo')) stopVoice(); // the assistant stops talking when its page is left
   route();
@@ -724,7 +733,7 @@ async function listenNext(pressed, mine = turn) {
     try { said = `${said} ${await listen()}`; } catch { break; }
   }
   if (echoes(said)) return mine === turn ? listenNext(pressed, mine) : undefined; // its own voice: not sent, and it listens on
-  return heard(said); // whatever goes wrong with the answer is shown like any other error, not swallowed here
+  return heard(said, true); // whatever goes wrong with the answer is shown like any other error, not swallowed here
 }
 async function says(text, more) {
   talk.push({ who: 'ai', text, ...more });
@@ -794,8 +803,9 @@ function startReg() {
   reg = { form: {}, asked: null, tries: 0, done: false, fee: 0 };
   return regTurn('');
 }
-// What the owner said or typed: an answer to the question in progress, or a question of their own.
-async function heard(text) {
+// What the owner said or typed: an answer to the question in progress, or a question of their own. `spoken` says
+// that it came through the microphone, which can also hear the assistant's own voice from the loudspeaker.
+async function heard(text, spoken) {
   text = text.trim();
   if (!text || thinking) return undefined;
   const mine = ++turn, box = $('#boloInput');
@@ -811,12 +821,22 @@ async function heard(text) {
     // The last few turns go along, so 'kab khatam hogi?' after a question about Meena is understood to be about her.
     const filled = !!(reg && reg.done);
     let r, done = '';
-    try { r = await api('POST', '/api/chat', { question: text, confirming: !!asked || filled, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) }); } catch (e) {
+    try { r = await api('POST', '/api/chat', { question: text, spoken: !!spoken, confirming: !!asked || filled, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) }); } catch (e) {
       if (e.status === 401 || e.status === 402) throw e;
       // No answer came, so nothing was changed. It is said in the talk, where the owner is looking, and a 'shall I?'
       // that was waiting for this reply waits again, with its buttons.
       thinking = false;
       return await says(noAnswer(e, asked ? 'कुछ बदला नहीं है। फिर से "हाँ, कर दो" दबाइए।' : 'फिर से बोलिए।'), { pending: asked });
+    }
+    if (r.echo) {
+      // The server knew the words for the assistant's own last sentence: nobody said them. The bubble goes, what was
+      // waiting for a yes waits again, and the microphone listens on.
+      talk.pop();
+      if (asked && talk.at(-1)) talk.at(-1).pending = asked;
+      thinking = false;
+      renderTalk();
+      if (mine === turn) aside(listenNext(false, mine));
+      return undefined;
     }
     if (r.run && asked) {
       try { done = await carryOut(asked); } catch (e) {
@@ -891,7 +911,7 @@ function renderTalk() {
       ${m ? `<div class="msg-meta">${waBtn(m, 'welcome', 'Send welcome on WhatsApp', 'primary')}<a class="btn secondary" href="#/members/${esc(m.id)}">Open member</a></div>` : ''}
       ${due && ['fees', 'expiring', 'expired'].includes(t.remind.type) ? `<div class="msg-meta">${waBtn(due, t.remind.type, 'Send on WhatsApp', 'primary')}</div>` : ''}
       ${page ? `<div class="msg-meta"><a class="btn secondary" href="#/${page}">Open ${page.startsWith('members') ? 'member' : page}</a></div>` : ''}
-      ${t.pending ? '<div class="msg-meta"><button class="btn primary" data-action="bolo-ask">हाँ, कर दो</button><button class="btn secondary" data-action="bolo-ask">नहीं</button></div>' : ''}
+      ${t.pending && t === talk.at(-1) ? '<div class="msg-meta"><button class="btn primary" data-action="bolo-ask">हाँ, कर दो</button><button class="btn secondary" data-action="bolo-ask">नहीं</button></div>' : ''}
       ${t.settings ? '<div class="msg-meta"><a class="btn primary" href="#/settings">Fill in the gym prices</a></div>' : ''}${t.hello && talk.length === 1 ? `<div class="msg-meta">${askChips()}</div>` : ''}</div>`; }).join('')
     : `<p class="muted">Press <strong>New member</strong> and answer the questions aloud, or ask about your gym:</p>
        ${['किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'].map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('')}`)
