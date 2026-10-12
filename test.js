@@ -95,6 +95,34 @@ async function talkChecks() {
     await among('9223 64296', whichRohit), await among('2960', whichRohit), await among('बच्चन', whichRohit), await among('92236 42960'), await among('64296'), await among('88888 11111', whichRohit), await among('55555')],
     ['Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan', 'इस नाम के 21 मेंबर हैं। किसकी बात कर रहे हैं? मोबाइल नंबर बताइए।', false, 'Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan', 'Rohit bacchan',
       'इस नंबर का कोई मेंबर नहीं मिला। नंबर एक बार फिर देखकर बताइए, या पूरा नाम बोलिए।', 'इस नंबर का कोई मेंबर नहीं मिला। नंबर एक बार फिर देखकर बताइए, या पूरा नाम बोलिए।']);
+  // Only an order in the imperative is an order. What was done, or is asked about, is answered with where the member
+  // stands. The assistant's own words, which the phone's microphone may hear from its loudspeaker, are nobody's order,
+  // and while a 'shall I?' waits only a short plain reply is a yes
+  const club = { gym: { name: 'Fit Zone', price1: 1000 }, payments: [], deleted: [{ id: 'x1', name: 'Rohit', phone: '9922233344', deletedAt: '2026-10-12T05:00:00.000Z' }, { id: 'x2', name: 'Priya Jain', phone: '9829044400', deletedAt: '2026-10-11T05:00:00.000Z' }],
+    members: [member('r1', 'Rohit Mali', '9700001644', 0), member('r2', 'Rohit Lodha', '9700005069', 0), member('rn', 'Rohit', '9922233355', 400), member('p', 'Priya Jain', '9829044444', 400)] };
+  const got = async (question, history = [], more = {}) => { const r = await ai.chat({ question, db: club, today, history, ...more }); return r.pending ? `${r.pending.do} ${r.pending.id}` : r.run ? 'run' : r.no ? 'no' : r.answer.split('\n')[0]; };
+  const stillHere = (name) => `${name} अभी मेंबर हैं, हटाए नहीं गए हैं। हटाना हो तो बोलिए: "${name} को हटा दो"।`, again = 'माफ़ कीजिए, ठीक से सुनाई नहीं दिया। फिर से बोलिए।';
+  const shallI = [{ who: 'me', text: '9922233355 ko hata do' }, { who: 'ai', text: 'Rohit (9922233355) को जिम से हटा दूँ? 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।' }];
+  assert.deepEqual([await got('priya ko hata do'), await got('प्रिया को हटा दो'), await got('priya ko delete kar do'), await got('priya ko nikal do'), await got('9922233355 ko hata do'), await got('priya ko 3 mahine renew kar do')],
+    ['delete p', 'delete p', 'delete p', 'delete p', 'delete rn', 'renew p']);
+  assert.deepEqual([await got('priya ko hata diya'), await got('प्रिया को हटा दिया'), await got('priya ko hata diya kya'), await got('maine priya ko nikal diya tha'), (await got('priya ka renew ho gaya')).slice(0, 10)],
+    [stillHere('Priya Jain'), stillHere('Priya Jain'), stillHere('Priya Jain'), stillHere('Priya Jain'), 'Priya Jain']);
+  // The owner's screenshot: the yes got no answer, he asks 'हटा दिया', and is not asked 'shall I delete?' all over again.
+  // Once the member has gone, the same words are told so, though two other Rohits remain
+  assert.deepEqual([await got('हटा दिया', [...shallI, { who: 'me', text: 'हाँ, कर दो' }]), await got('हटा दिया', [{ who: 'me', text: '9922233344 ko hata do' }, { who: 'ai', text: 'Rohit को हटा दिया। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।' }])],
+    [stillHere('Rohit'), 'Rohit को हटाया जा चुका है। 30 दिन तक Members के Deleted टैब से वापस ला सकते हैं।']);
+  assert.deepEqual([await got('को जिम से हटा दूं 30 दिन तक मेंबर्स के डिलीटेड टैब से वापस ला सकते हैं', shallI), await got('के 400 रुपये कैश में जमा करूं', [{ who: 'me', text: 'priya ki fees jama kar do' }, { who: 'ai', text: 'Priya Jain (9829044444) के ₹400 कैश में जमा करूँ?' }])], [again, again]);
+  const waiting = { confirming: true };
+  assert.deepEqual([await got('हां कर दो', shallI, waiting), await got('ठीक है', shallI, waiting), await got('कर दीजिए', shallI, waiting), await got('haan ji', shallI, waiting), await got('नहीं रहने दो', shallI, waiting), await got('cancel karo', shallI, waiting),
+    await got('जी का फॉर्म तैयार है एक बार देख लीजिए सेव कर दूं', shallI, waiting), await got('सेव कर दूं', shallI, waiting), ['run', 'no'].includes(await got('राहुल जी की फीस कितनी बाकी है ज़रा ठीक से बताओ', shallI, waiting))],
+    ['run', 'run', 'run', 'run', 'no', 'no', again, again, false]);
+  // The owner's own spelling of the verbs is read ('kerdo', 'krdo', 'hatado'). A mobile number is changed for the member
+  // who is NAMED, whoever has that number now: the same number again, a number that is another member's, and one that is
+  // no mobile number are each said so, instead of 'I did not understand'
+  assert.deepEqual([await got('priya ka mobile number 98290 77777 kerdo'), await got('priya ka weight 62 krdo'), await got('priya ki fees jama kerdo'), await got('priya ko delete kerdo'), await got('priya ko hatado'),
+    await got('priya ka mobile number 9829044444 kerdo'), await got('priya का मोबाइल नंबर 97000 01644 कर दो'), await got('priya ka number 98290 kar do'), (await ai.chat({ question: 'priya ka mobile number 98290 77777 kerdo', db: club, today })).pending.body.phone],
+    ['edit p', 'edit p', 'pay p', 'delete p', 'delete p', 'Priya Jain का मोबाइल पहले से 9829044444 ही है। कुछ बदलने की ज़रूरत नहीं।', '9700001644 नंबर Rohit Mali का है। एक नंबर दो मेंबर का नहीं हो सकता।',
+      '98290 मोबाइल नंबर नहीं हो सकता। मोबाइल नंबर पूरे 10 अंकों का बोलिए।', '9829077777']);
   // What an owner may say, and what each gets without the AI: how the answer begins, and what comes with it (the number
   // of lines, a change to say yes to, a reminder to send, or a page to open)
   const shop = { gym: { name: 'Fit Zone', price1: 1000, price3: 2700, ptPrice: 2000, timings: '6 से 10' }, payments: [{ amount: 1000, date: today, mode: 'Cash' }, { amount: 600, date: '2026-10-10', mode: 'UPI' }, { amount: 900, date: '2026-09-20', mode: 'Cash' }],

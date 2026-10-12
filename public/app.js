@@ -102,9 +102,22 @@ const waBtn = (m, type, label, cls = 'secondary') => `<a class="btn ${cls}" targ
 // While anything is being fetched a bar runs along the top of the page, so a slow answer never looks like a dead button.
 let waiting = 0;
 const loading = (by) => { waiting += by; document.body.classList.toggle('loading', waiting > 0); };
+// A request that changes nothing is simply made again when it fails for no fault of its own: the server is away for
+// a minute whenever it is updated, and a phone's connection drops. Three tries, a moment apart. A request that
+// changes something is never repeated by itself, since the first one may have gone through.
+const AGAIN_OK = ['/api/chat', '/api/register/turn'];
+const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 async function api(method, path, body) {
   loading(1);
-  try { return await ask(method, path, body); } finally { loading(-1); }
+  try {
+    for (let tries = 0; ; tries++) {
+      try { return await ask(method, path, body); } catch (e) {
+        const passing = !e.status || [502, 503, 504].includes(e.status);
+        if (tries > 1 || !passing || !(method === 'GET' || AGAIN_OK.includes(path))) throw e;
+        await pause(1500 * (tries + 1));
+      }
+    }
+  } finally { loading(-1); }
 }
 async function ask(method, path, body) {
   // Every write carries a JSON content type: the server's CSRF defence rejects anything else.
@@ -616,7 +629,8 @@ let hearing = null; // the speech recognition that is listening now
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 function stopVoice() {
-  if (hearing) try { hearing.abort(); } catch { /* it never started */ }
+  // What was half heard when the listening is cut off is dropped: it was not sent by the owner.
+  if (hearing) { hearing.dropped = true; try { hearing.abort(); } catch { /* it never started */ } }
   if (window.speechSynthesis) speechSynthesis.cancel();
 }
 // Says the text aloud in Hindi. Resolves when it has been said, or at once where the browser has no voice.
@@ -624,9 +638,15 @@ function speak(text) {
   return new Promise((done) => {
     if (!window.speechSynthesis || !text) return done();
     const u = new SpeechSynthesisUtterance(text.replace(/[*_]/g, ''));
+    let over = false;
+    const end = () => { if (!over) { over = true; clearInterval(watch); done(); } };
     u.lang = 'hi-IN';
-    u.onend = u.onerror = done;
-    setTimeout(done, 2500 + text.length * 110); // some browsers never report the end
+    u.onend = u.onerror = end;
+    // Some browsers never report the end, so the voice is given the time the text needs. But while it is still heard
+    // talking (a ten-digit number is read out slowly) the wait goes on, for half a minute more at most: whoever waits
+    // for this opens the microphone next, and it must not open onto the assistant's own voice.
+    const since = Date.now(), least = 2500 + text.length * 110;
+    const watch = setInterval(() => { const t = Date.now() - since; if (t > least && (!speechSynthesis.speaking || t > least + 30000)) end(); }, 250);
     speechSynthesis.cancel();
     return speechSynthesis.speak(u);
   });
@@ -642,7 +662,7 @@ function listen() {
       clearTimeout(stuck);
       if (hearing === rec) hearing = null;
       renderTalk();
-      return text.trim() ? resolve(text.trim()) : reject(Object.assign(new Error(why), { mic: true }));
+      return text.trim() && !rec.dropped ? resolve(text.trim()) : reject(Object.assign(new Error(rec.dropped ? 'aborted' : why), { mic: true }));
     };
     // A browser that never reports the end of listening, or refuses to start, must not leave the mic dead until a reload.
     const stuck = setTimeout(() => { try { rec.abort(); } catch { /* it never started */ } end(); }, 25000);
@@ -671,9 +691,26 @@ const HANGING = /(^|\s)(कि|और|तो|या|लेकिन|ki|aur|toh?|
 let turn = 0;
 // Runs a part of the talk without making its button wait for the speaking to end: a new message can always be sent.
 const aside = (work) => { Promise.resolve(work).catch((e) => { console.error(e); toast(e.message, true); }); };
-// `pressed` is the owner pressing the mic, who is told even that nothing was heard.
-async function listenNext(pressed) {
+// The phone's loudspeaker is heard by its own microphone. Two things keep the assistant from answering itself: the
+// microphone waits until the voice has stopped and the room is quiet, and a long sentence that is mostly the
+// assistant's own last one is not taken for the owner. (A short one cannot be told from a real answer: 'शाम को'
+// is in the question too. The waiting is what guards those.)
+const wordsOf = (text) => text.toLowerCase().replace(/ँ/g, 'ं').replace(/(\d),(\d)/g, '$1$2').replace(/[^\p{L}\p{N}\p{M}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 1);
+function echoes(said) {
+  const last = [...talk].reverse().find((t) => t.who === 'ai'), mine = wordsOf(said), theirs = new Set(last ? wordsOf(last.text) : []);
+  return mine.length > 4 && mine.filter((w) => theirs.has(w)).length / mine.length >= 0.7;
+}
+// When the owner pressed the mic the voice was cut off for it, and no moment is lost before listening.
+async function quiet(settle) {
+  for (let i = 0; i < 100 && window.speechSynthesis && speechSynthesis.speaking; i++) await pause(200);
+  if (settle) await pause(400);
+}
+// `pressed` is the owner pressing the mic, who is told even that nothing was heard. `mine` is the turn this listening
+// belongs to: when something else has been said or sent while the voice was finishing, it does not open.
+async function listenNext(pressed, mine = turn) {
   if (!Speech || current !== 'bolo' || hearing) return undefined;
+  await quiet(!pressed);
+  if (current !== 'bolo' || hearing || mine !== turn || thinking) return undefined;
   micNote = '';
   let said;
   try { said = await listen(); } catch (e) {
@@ -686,6 +723,7 @@ async function listenNext(pressed) {
   for (let more = 0; more < 2 && HANGING.test(said.trim()); more++) {
     try { said = `${said} ${await listen()}`; } catch { break; }
   }
+  if (echoes(said)) return mine === turn ? listenNext(pressed, mine) : undefined; // its own voice: not sent, and it listens on
   return heard(said); // whatever goes wrong with the answer is shown like any other error, not swallowed here
 }
 async function says(text, more) {
@@ -699,13 +737,21 @@ async function regTurn(said) {
   thinking = true;
   renderTalk();
   try {
-    const r = await api('POST', '/api/register/turn', { form: reg.form, asked: reg.asked, said, tries: reg.tries });
+    let r;
+    try { r = await api('POST', '/api/register/turn', { form: reg.form, asked: reg.asked, said, tries: reg.tries }); } catch (e) {
+      if (e.status === 401 || e.status === 402) throw e;
+      // Nothing is lost: the form is as it was, and the same question waits for the same answer.
+      thinking = false;
+      await says(noAnswer(e, 'अपना जवाब फिर से बोलिए।'));
+      if (mine === turn) aside(listenNext(false, mine));
+      return undefined;
+    }
     if (r.setup) { reg = null; thinking = false; return await says(r.say, { settings: true }); } // the gym has no prices yet
     if (r.cancel) { reg = null; thinking = false; return await says(r.say); } // 'cancel karo', said part of the way through
     Object.assign(reg, { form: r.form, asked: r.next, tries: r.tries, done: r.done, fee: r.fee });
     thinking = false;
     await says(r.say);
-    if (mine === turn) aside(listenNext()); // after the last question too: 'shall I save?' is answered aloud as well
+    if (mine === turn) aside(listenNext(false, mine)); // after the last question too: 'shall I save?' is answered aloud as well
   } finally {
     thinking = false;
     renderTalk();
@@ -716,7 +762,7 @@ function greet() {
   stopVoice();
   reg = null;
   talk = [];
-  return says('नमस्ते! मैं आपका जिम साथी असिस्टेंट हूँ। मैं आपकी क्या मदद कर सकता हूँ? नया मेंबर जोड़ना हो या कुछ पूछना हो, बस बोलिए।', { hello: true }).then(((mine) => () => { if (mine === turn) aside(listenNext()); })(++turn));
+  return says('नमस्ते! मैं आपका जिम साथी असिस्टेंट हूँ। मैं आपकी क्या मदद कर सकता हूँ? नया मेंबर जोड़ना हो या कुछ पूछना हो, बस बोलिए।', { hello: true }).then(((mine) => () => { if (mine === turn) aside(listenNext(false, mine)); })(++turn));
 }
 const ASKS = ['नया मेंबर जोड़ो', 'किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'];
 const askChips = () => ASKS.map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('');
@@ -764,15 +810,37 @@ async function heard(text) {
   try {
     // The last few turns go along, so 'kab khatam hogi?' after a question about Meena is understood to be about her.
     const filled = !!(reg && reg.done);
-    const r = await api('POST', '/api/chat', { question: text, confirming: !!asked || filled, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) });
-    const done = r.run && asked ? await carryOut(asked) : '';
+    let r, done = '';
+    try { r = await api('POST', '/api/chat', { question: text, confirming: !!asked || filled, history: talk.slice(-7, -1).map((t) => ({ who: t.who, text: t.text })) }); } catch (e) {
+      if (e.status === 401 || e.status === 402) throw e;
+      // No answer came, so nothing was changed. It is said in the talk, where the owner is looking, and a 'shall I?'
+      // that was waiting for this reply waits again, with its buttons.
+      thinking = false;
+      return await says(noAnswer(e, asked ? 'कुछ बदला नहीं है। फिर से "हाँ, कर दो" दबाइए।' : 'फिर से बोलिए।'), { pending: asked });
+    }
+    if (r.run && asked) {
+      try { done = await carryOut(asked); } catch (e) {
+        if (e.status === 401 || e.status === 402) throw e;
+        thinking = false;
+        // The server said no and why (then nothing was changed), or it did not answer (then nobody knows yet).
+        if (e.status && e.status < 500) return await says(`यह नहीं हो पाया, कुछ बदला नहीं है। कारण: ${e.message}`);
+        await refresh().catch(() => {});
+        return await says('सर्वर से जवाब नहीं आया, इसलिए पक्का नहीं कि यह हुआ या नहीं। एक बार Members में देख लीजिए; न हुआ हो तो फिर से बोलिए।');
+      }
+    }
     thinking = false;
     // The filled form waits for a yes as well: 'haan, save kar do' saves the member, a no drops the form.
-    if (filled && (r.run || r.no)) return await actions[r.run ? 'reg-save' : 'reg-cancel']();
+    if (filled && r.run) {
+      try { return await actions['reg-save'](); } catch (e) {
+        if (e.status === 401 || e.status === 402) throw e;
+        return await says(`सेव नहीं हो पाया। कारण: ${e.message} फॉर्म में "Change" दबा कर ठीक कीजिए, या फिर से "हाँ" बोलिए।`);
+      }
+    }
+    if (filled && r.no) return await actions['reg-cancel']();
     if (done) return await says(done);
     if (r.start === 'register') return startReg();
     await says(r.answer, { pending: r.pending, remind: r.remind, page: r.page });
-    if (r.pending && mine === turn) aside(listenNext()); // it asked 'shall I?' and now listens for the yes
+    if (r.pending && mine === turn) aside(listenNext(false, mine)); // it asked 'shall I?' and now listens for the yes
     return undefined;
   } finally {
     thinking = false;
@@ -781,6 +849,8 @@ async function heard(text) {
 }
 // Does what the owner said yes to, by the same requests as the buttons on the member's page, and reads the gym afresh
 // so that every page shows it. Returns what to say.
+// What is said in the talk when the server gave no answer at all, with what the owner should do next.
+const noAnswer = (e, next) => (e.status === 429 ? `एक मिनट में बहुत सारे सवाल हो गए। एक मिनट रुकिए, फिर ${next}` : `अभी सर्वर से जवाब नहीं आया (इंटरनेट देखिए, या सर्वर अपडेट हो रहा है)। ${next}`);
 async function carryOut({ do: what, id, body }) {
   if (what === 'payall') {
     const all = await api('POST', '/api/members/pay', body);
@@ -864,7 +934,7 @@ Object.assign(actions, {
     if (hearing) return hearing.halt();
     if (window.speechSynthesis) speechSynthesis.cancel(); // pressing the mic while it speaks: it stops and listens
     turn++;
-    return aside(listenNext(true));
+    return aside(listenNext(true, turn));
   },
   'bolo-send'(form) { stopVoice(); aside(heard(form.said.value)); },
   'bolo-ask'(el) { stopVoice(); aside(heard(el.textContent)); },
