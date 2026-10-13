@@ -668,12 +668,25 @@ function speak(text) {
     const u = new SpeechSynthesisUtterance(text.replace(/[*_]/g, ''));
     let over = false;
     const end = (said) => { if (!over) { over = true; clearInterval(watch); done(said); } };
+    
     u.lang = 'hi-IN';
+    u.rate = 1.5; // Speed 1.5x
+
+    // --- NAYA VOICE SELECTION LOGIC ---
+    const voices = window.speechSynthesis.getVoices();
+    // Windows me 'Hemant' male Hindi voice hoti hai, ya kisi aur OS me jiske naam me 'Male' ya 'Rishi' ho
+    const maleVoice = voices.find(v => v.lang.includes('hi') && (v.name.includes('Hemant') || v.name.includes('Male')))
+                   || voices.find(v => v.name.includes('Rishi') || (v.lang === 'en-IN' && v.name.includes('Male')))
+                   || voices.find(v => v.lang === 'hi-IN'); // Agar male nahi mila toh jo default Hindi hai wo laga do
+
+    if (maleVoice) {
+      u.voice = maleVoice;
+    }
+    // ----------------------------------
+
     u.onend = () => end(true);
-    u.onerror = (e) => end(!['interrupted', 'canceled'].includes(e && e.error)); // a phone with no Hindi voice still goes on
-    // Some browsers never report the end, so the voice is given the time the text needs. But while it is still heard
-    // talking (a ten-digit number is read out slowly) the wait goes on, for half a minute more at most: whoever waits
-    // for this opens the microphone next, and it must not open onto the assistant's own voice.
+    u.onerror = (e) => end(!['interrupted', 'canceled'].includes(e && e.error)); 
+    
     const since = Date.now(), least = 2500 + text.length * 110;
     const watch = setInterval(() => { const t = Date.now() - since; if (t > least && (!speechSynthesis.speaking || t > least + 30000)) end(true); }, 250);
     speechSynthesis.cancel();
@@ -1003,19 +1016,29 @@ Object.assign(actions, {
   // The microphone that waits for a spoken yes is closed: a stray 'ठीक है' must not save the form under the edit box.
   // The fee box is left empty, which means the gym's price for the plan as the box ends up with it.
   'reg-edit'() { stopVoice(); turn++; openDialog(dialogForm('New member', 'member-save', '', memberForm(reg.form, true), 'Save member')); },
-  async 'reg-save'() {
+ async 'reg-save'() {
     const it = reg;
-    if (!it || it.saving) return undefined; // a second tap, while the first is on its way or after it has saved
-    stopVoice(); // the microphone that waited for a spoken yes must not stay open while the assistant speaks
+    if (!it || it.saving) return undefined; 
+    stopVoice(); 
     turn++;
     it.saving = true;
-    let m;
-    try { m = await api('POST', '/api/members', { ...it.form, fee: it.fee, mode: 'Cash' }); } finally { it.saving = false; }
+    
+    // PARALLEL/BACKGROUND DB SAVE: Bina wait kiye API ko async chhod diya
+    api('POST', '/api/members', { ...it.form, fee: it.fee, mode: 'Cash' })
+      .then(async (m) => {
+        await refresh().catch(() => {}); 
+        // Save hone ke baad chupchaap WhatsApp button screen par aa jayega
+        talk.push({ who: 'ai', text: `${m.name} जी का रिकॉर्ड सेव हो गया है।`, welcome: m.id });
+        renderTalk();
+      })
+      .catch((e) => toast(`Save error: ${e.message}`, true));
+
     if (reg === it) reg = null;
-    await refresh().catch(() => {}); // the member is saved; the version check reads the gym again anyway
-    // An order asked while the card waited ('... हटा दूँ?') still waits: its question goes back under the news.
+
     const waits = (talk.at(-1) || {}).pending ? talk.pop() : null;
-    const told = says(`${m.name} जी जुड़ गए।${G.due(m) ? ` ${Math.round(G.due(m))} रुपये बाकी हैं, उनका रिमाइंडर रोज़ डैशबोर्ड पर मिलेगा।` : ''} व्हाट्सऐप पर स्वागत संदेश भेज दीजिए।`, { welcome: m.id });
+    
+    // AI turant bolega aur next action ke liye free ho jayega
+    const told = says('सेव किया जा रहा है, आप अगला काम बोल सकते हैं।');
     if (waits) { talk.push(waits); renderTalk(); }
     return told;
   },
