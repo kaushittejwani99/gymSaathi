@@ -114,7 +114,7 @@ async function api(method, path, body) {
       try { return await ask(method, path, body); } catch (e) {
         const passing = !e.status || [502, 503, 504].includes(e.status);
         if (tries > 1 || !passing || !(method === 'GET' || AGAIN_OK.includes(path))) throw e;
-        await pause(1500 * (tries + 1));
+      await pause(300 * (2 ** tries));
       }
     }
   } finally { loading(-1); }
