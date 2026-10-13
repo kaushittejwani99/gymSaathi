@@ -698,7 +698,24 @@ function listen() {
     let whole = false;
     const stuck = setTimeout(() => { rec.dropped = !!text.trim() && !whole; try { rec.abort(); } catch { /* it never started */ } end(); }, 25000);
     Object.assign(rec, { lang: 'hi-IN', interimResults: true });
-    rec.onresult = (e) => { text = [...e.results].map((r) => r[0].transcript).join(' '); whole = [...e.results].every((r) => r.isFinal); const box = $('#boloInput'); if (box) box.value = text; };
+    rec.onresult = (e) => { 
+  text = [...e.results].map((r) => r[0].transcript).join(' '); 
+  whole = [...e.results].every((r) => r.isFinal); 
+  const box = $('#boloInput'); 
+  if (box) box.value = text; 
+  
+  // Naya Logic: Agar answer chota aur valid lag raha hai, toh mic turant band kar do
+  let currentWordCount = text.trim().split(/\s+/).length;
+  // Agar registration chal raha hai aur user ne naam (1-3 words) ya number (10 digits) bol diya hai
+  if (reg && !reg.done && currentWordCount > 0) {
+    let cleanText = text.replace(/\s+/g, '');
+    // Agar mobile number pucha hai aur 10 digit mil gaye, YA naam pucha hai aur 2-3 words mil gaye
+    if ((reg.asked === 'phone' && cleanText.match(/^\d{10}$/)) || 
+        (reg.asked === 'name' && currentWordCount >= 2)) {
+      rec.stop(); // Mic turant band, agla sawaal hazir!
+    }
+  }
+};
     rec.onerror = (e) => { why = e.error; };
     rec.onend = end;
     // Pressing the mic again stops the listening. Should the browser not answer the stop, the mic is freed all the same.
