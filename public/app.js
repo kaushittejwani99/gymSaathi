@@ -971,14 +971,14 @@ function renderTalk() {
       ${t.settings ? '<div class="msg-meta"><a class="btn primary" href="#/settings">Fill in the gym prices</a></div>' : ''}${t.hello && talk.length === 1 ? `<div class="msg-meta">${askChips()}</div>` : ''}</div>`; }).join('')
     : `<p class="muted">Press <strong>New member</strong> and answer the questions aloud, or ask about your gym:</p>
        ${['किसकी फीस बाकी है?', 'किसकी मेंबरशिप खत्म हो रही है?', 'इस महीने कितना पैसा आया?'].map((q) => `<button class="chip" data-action="bolo-ask">${q}</button>`).join('')}`)
-    + (reg && reg.done ? regCard() : '') + (thinking ? '<div class="msg typing" aria-label="Thinking"><i></i><i></i><i></i></div>' : '');
+    + (reg && reg.done ? regCard() : ''); // YAHAN SE '...' (thinking) WALA ANIMATION PURI TARAH HATA DIYA GAYA HAI
+    
   log.scrollTop = log.scrollHeight;
   const mic = $('#boloMic');
   if (mic) { mic.hidden = !Speech; if (hearing) mic.setAttribute('aria-pressed', 'true'); else mic.removeAttribute('aria-pressed'); }
   const state = $('#boloState');
   if (state) state.textContent = hearing ? 'Listening… speak now' : micNote || (reg && !reg.done ? 'Registering a new member' : '');
 }
-
 views.bolo = (id, q) => {
   // Reached from a 'New member by voice' button: the questions start at once.
   if (q.get('hi')) setTimeout(() => { history.replaceState(null, '', '#/bolo'); greet().catch((e) => toast(e.message, true)); });
