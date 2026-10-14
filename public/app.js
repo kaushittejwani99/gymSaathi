@@ -1310,7 +1310,7 @@ function speak(text) {
       }
     };
     u.lang = "hi-IN";
-    u.rate = 1.20;
+    u.rate = 1.25;
     u.onend = () => end(true);
     u.onerror = (e) => end(!["interrupted", "canceled"].includes(e && e.error)); // a phone with no Hindi voice still goes on
     // Some browsers never report the end, so the voice is given the time the text needs. But while it is still heard
