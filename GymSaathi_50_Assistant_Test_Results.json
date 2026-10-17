@@ -1,0 +1,580 @@
+{
+  "env": "isolated local file-backed DB; quick/local fallback; Gemini key removed",
+  "questionCount": 50,
+  "pass": 50,
+  "fail": 0,
+  "results": [
+    {
+      "n": 1,
+      "question": "कुल कितने मेंबर हैं?",
+      "answer": "कुल 6 मेंबर हैं।\n- चालू: 4\n- 7 दिन में खत्म होने वाली: 1\n- खत्म हो चुकी: 1",
+      "pass": true,
+      "reason": "mode=local, chars=74",
+      "raw": {
+        "answer": "कुल 6 मेंबर हैं।\n- चालू: 4\n- 7 दिन में खत्म होने वाली: 1\n- खत्म हो चुकी: 1",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 2,
+      "question": "किसकी फीस बाकी है?",
+      "answer": "4 मेंबर की फीस बाकी है, कुल ₹1,600।\n- Aman Singh: ₹500\n- Soon Ending: ₹500\n- Rahul Sharma: ₹300\n- Muskan Arora: ₹300",
+      "pass": true,
+      "reason": "mode=local, chars=116",
+      "raw": {
+        "answer": "4 मेंबर की फीस बाकी है, कुल ₹1,600।\n- Aman Singh: ₹500\n- Soon Ending: ₹500\n- Rahul Sharma: ₹300\n- Muskan Arora: ₹300",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 3,
+      "question": "Aman Singh की फीस कितनी बाकी है?",
+      "answer": "Aman Singh की मेंबरशिप 17 Nov 2026 तक है, और ₹500 बाकी है।\n- नाम: Aman Singh\n- मोबाइल: 9876543211\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹0\n- बाकी: ₹500",
+      "pass": true,
+      "reason": "mode=local, chars=208",
+      "raw": {
+        "answer": "Aman Singh की मेंबरशिप 17 Nov 2026 तक है, और ₹500 बाकी है।\n- नाम: Aman Singh\n- मोबाइल: 9876543211\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹0\n- बाकी: ₹500",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 4,
+      "question": "Priya Jain की फीस कितनी बाकी है?",
+      "answer": "Priya Jain की मेंबरशिप 17 Nov 2026 तक है, और कोई फीस बाकी नहीं है।\n- नाम: Priya Jain\n- मोबाइल: 9876543212\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹500\n- बाकी: ₹0",
+      "pass": true,
+      "reason": "mode=local, chars=216",
+      "raw": {
+        "answer": "Priya Jain की मेंबरशिप 17 Nov 2026 तक है, और कोई फीस बाकी नहीं है।\n- नाम: Priya Jain\n- मोबाइल: 9876543212\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹500\n- बाकी: ₹0",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 5,
+      "question": "Rahul Sharma का मोबाइल नंबर बताओ",
+      "answer": "Rahul Sharma का मोबाइल नंबर: 9876543213।\n- नाम: Rahul Sharma\n- मोबाइल: 9876543213\n- मेंबरशिप: 18 Oct 2026 से 17 Jan 2027 (3 महीने)\n- स्थिति: चालू (91 दिन बाकी)\n- फीस: ₹1,300, जमा ₹1,000\n- बाकी: ₹300",
+      "pass": true,
+      "reason": "mode=local, chars=198",
+      "raw": {
+        "answer": "Rahul Sharma का मोबाइल नंबर: 9876543213।\n- नाम: Rahul Sharma\n- मोबाइल: 9876543213\n- मेंबरशिप: 18 Oct 2026 से 17 Jan 2027 (3 महीने)\n- स्थिति: चालू (91 दिन बाकी)\n- फीस: ₹1,300, जमा ₹1,000\n- बाकी: ₹300",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 6,
+      "question": "Muskan Arora का goal क्या है?",
+      "answer": "Muskan Arora का लक्ष्य: Weight loss।\n- नाम: Muskan Arora\n- मोबाइल: 9876543214\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹200\n- बाकी: ₹300",
+      "pass": true,
+      "reason": "mode=local, chars=190",
+      "raw": {
+        "answer": "Muskan Arora का लक्ष्य: Weight loss।\n- नाम: Muskan Arora\n- मोबाइल: 9876543214\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹200\n- बाकी: ₹300",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 7,
+      "question": "Rahul Sharma की membership कब खत्म होगी?",
+      "answer": "Rahul Sharma की मेंबरशिप 17 Jan 2027 तक है, और ₹300 बाकी है।\n- नाम: Rahul Sharma\n- मोबाइल: 9876543213\n- मेंबरशिप: 18 Oct 2026 से 17 Jan 2027 (3 महीने)\n- स्थिति: चालू (91 दिन बाकी)\n- फीस: ₹1,300, जमा ₹1,000\n- बाकी: ₹300",
+      "pass": true,
+      "reason": "mode=local, chars=218",
+      "raw": {
+        "answer": "Rahul Sharma की मेंबरशिप 17 Jan 2027 तक है, और ₹300 बाकी है।\n- नाम: Rahul Sharma\n- मोबाइल: 9876543213\n- मेंबरशिप: 18 Oct 2026 से 17 Jan 2027 (3 महीने)\n- स्थिति: चालू (91 दिन बाकी)\n- फीस: ₹1,300, जमा ₹1,000\n- बाकी: ₹300",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 8,
+      "question": "कौन-कौन से members active हैं?",
+      "answer": "चालू मेंबर: 4 मेंबर।\n- Aman Singh: 9876543211\n- Priya Jain: 9876543212\n- Rahul Sharma: 9876543213\n- Muskan Arora: 9876543214",
+      "pass": true,
+      "reason": "mode=local, chars=124",
+      "raw": {
+        "answer": "चालू मेंबर: 4 मेंबर।\n- Aman Singh: 9876543211\n- Priya Jain: 9876543212\n- Rahul Sharma: 9876543213\n- Muskan Arora: 9876543214",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 9,
+      "question": "कितने members expired हैं?",
+      "answer": "खत्म हो चुकी मेंबरशिप: 1 मेंबर।\n- Expired Guest: 9876543215",
+      "pass": true,
+      "reason": "mode=local, chars=59",
+      "raw": {
+        "answer": "खत्म हो चुकी मेंबरशिप: 1 मेंबर।\n- Expired Guest: 9876543215",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 10,
+      "question": "अगले 7 दिनों में किसकी membership खत्म हो रही है?",
+      "answer": "अगले 7 दिनों में membership ending report: 1 मेंबर.\n- Soon Ending: 21 Oct 2026 (इस तारीख को खत्म होगी)",
+      "pass": true,
+      "reason": "mode=local, chars=102",
+      "raw": {
+        "answer": "अगले 7 दिनों में membership ending report: 1 मेंबर.\n- Soon Ending: 21 Oct 2026 (इस तारीख को खत्म होगी)",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 11,
+      "question": "इस महीने कितना पैसा आया?",
+      "answer": "जिम की इस महीने payment report: कुल ₹2,200 (4 भुगतान)।\n- 18 Oct 2026: Priya Jain — ₹500 (Cash)\n- 18 Oct 2026: Rahul Sharma — ₹1,000 (Cash)\n- 18 Oct 2026: Muskan Arora — ₹200 (Cash)\n- 18 Oct 2026: Expired Guest — ₹500 (Cash)",
+      "pass": true,
+      "reason": "mode=local, chars=223",
+      "raw": {
+        "answer": "जिम की इस महीने payment report: कुल ₹2,200 (4 भुगतान)।\n- 18 Oct 2026: Priya Jain — ₹500 (Cash)\n- 18 Oct 2026: Rahul Sharma — ₹1,000 (Cash)\n- 18 Oct 2026: Muskan Arora — ₹200 (Cash)\n- 18 Oct 2026: Expired Guest — ₹500 (Cash)",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 12,
+      "question": "आज कितना पैसा आया?",
+      "answer": "जिम की आज payment report: कुल ₹2,200 (4 भुगतान)।\n- 18 Oct 2026: Priya Jain — ₹500 (Cash)\n- 18 Oct 2026: Rahul Sharma — ₹1,000 (Cash)\n- 18 Oct 2026: Muskan Arora — ₹200 (Cash)\n- 18 Oct 2026: Expired Guest — ₹500 (Cash)",
+      "pass": true,
+      "reason": "mode=local, chars=217",
+      "raw": {
+        "answer": "जिम की आज payment report: कुल ₹2,200 (4 भुगतान)।\n- 18 Oct 2026: Priya Jain — ₹500 (Cash)\n- 18 Oct 2026: Rahul Sharma — ₹1,000 (Cash)\n- 18 Oct 2026: Muskan Arora — ₹200 (Cash)\n- 18 Oct 2026: Expired Guest — ₹500 (Cash)",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 13,
+      "question": "पिछले महीने कितना पैसा आया?",
+      "answer": "जिम की पिछले महीने payment report: कुल ₹0 (0 भुगतान)।\nइस अवधि में कोई payment record नहीं मिला।",
+      "pass": true,
+      "reason": "mode=local, chars=95",
+      "raw": {
+        "answer": "जिम की पिछले महीने payment report: कुल ₹0 (0 भुगतान)।\nइस अवधि में कोई payment record नहीं मिला।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 14,
+      "question": "Gym ki fees kya hai?",
+      "answer": "जिम की फीस यह है:\n- 1 महीना: ₹500\n- 3 महीने: ₹1,300\n- 6 महीने: ₹2,400\n- 1 साल: ₹4,500\n- पर्सनल ट्रेनर: ₹100 महीना, अलग से\n- डाइट प्लान: ₹50 महीना, अलग से",
+      "pass": true,
+      "reason": "mode=local, chars=153",
+      "raw": {
+        "answer": "जिम की फीस यह है:\n- 1 महीना: ₹500\n- 3 महीने: ₹1,300\n- 6 महीने: ₹2,400\n- 1 साल: ₹4,500\n- पर्सनल ट्रेनर: ₹100 महीना, अलग से\n- डाइट प्लान: ₹50 महीना, अलग से",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 15,
+      "question": "Gym ka timing kya hai?",
+      "answer": "जिम का समय: 5 AM to 10 PM।",
+      "pass": true,
+      "reason": "mode=local, chars=26",
+      "raw": {
+        "answer": "जिम का समय: 5 AM to 10 PM।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 16,
+      "question": "Staff mein kaun kaun hai?",
+      "answer": "जिम में कुल 2 स्टाफ हैं:\n- Rohit Sharma (Trainer): 9598908555\n- Neha Verma (Reception): 9598908556",
+      "pass": true,
+      "reason": "mode=local, chars=98",
+      "raw": {
+        "answer": "जिम में कुल 2 स्टाफ हैं:\n- Rohit Sharma (Trainer): 9598908555\n- Neha Verma (Reception): 9598908556",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 17,
+      "question": "Naya member kaise add kare?",
+      "answer": "नया मेंबर आप 3 आसान तरीकों से बना (जोड़) सकते हैं:\n- बोलकर या लिखकर (Assistant से): यहीं चैट में \"नया मेंबर जोड़ो\" बोलिए या लिखिए, या ऊपर \"+ New member\" बटन दबाइए। मैं एक-एक करके नाम, मोबाइल नंबर, प्लान और फीस पूछकर फॉर्म भर दूँगा।\n- सीधा फॉर्म भरकर (Members पेज से): बाईं तरफ \"Members\" टैब में जाइए और \"+ New member\" बटन दबाकर फॉर्म भर दीजिए।\n- पुराने मेंबर जैसी डिटेल भरना: रजिस्ट्रेशन करते समय आप \"राहुल जैसी डिटेल भर दो\" भी बोल सकते हैं, जिससे बैच और प्लान जैसी जानकारी अपने आप भर जाएगी।\n- पुराना रिकॉर्ड अपलोड करके: अगर रजिस्टर या Excel से कई मेंबर एक साथ जोड़ने हैं, तो \"Members\" पेज में \"Import\" का इस्तेमाल करें।",
+      "pass": true,
+      "reason": "mode=local, chars=620",
+      "raw": {
+        "answer": "नया मेंबर आप 3 आसान तरीकों से बना (जोड़) सकते हैं:\n- बोलकर या लिखकर (Assistant से): यहीं चैट में \"नया मेंबर जोड़ो\" बोलिए या लिखिए, या ऊपर \"+ New member\" बटन दबाइए। मैं एक-एक करके नाम, मोबाइल नंबर, प्लान और फीस पूछकर फॉर्म भर दूँगा।\n- सीधा फॉर्म भरकर (Members पेज से): बाईं तरफ \"Members\" टैब में जाइए और \"+ New member\" बटन दबाकर फॉर्म भर दीजिए।\n- पुराने मेंबर जैसी डिटेल भरना: रजिस्ट्रेशन करते समय आप \"राहुल जैसी डिटेल भर दो\" भी बोल सकते हैं, जिससे बैच और प्लान जैसी जानकारी अपने आप भर जाएगी।\n- पुराना रिकॉर्ड अपलोड करके: अगर रजिस्टर या Excel से कई मेंबर एक साथ जोड़ने हैं, तो \"Members\" पेज में \"Import\" का इस्तेमाल करें।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 18,
+      "question": "Naya member add karo",
+      "answer": "{\"answer\":\"\",\"start\":\"register\"}",
+      "pass": true,
+      "reason": "start=register",
+      "raw": {
+        "answer": "",
+        "start": "register"
+      }
+    },
+    {
+      "n": 19,
+      "question": "Old data Excel se kaise import karu?",
+      "answer": "पुराना डेटा (रजिस्टर की फोटो, Excel, CSV या PDF) इम्पोर्ट करना बहुत आसान है:\n- स्टेप 1: बाईं तरफ के मेन्यू में \"Members\" पेज पर क्लिक कीजिए।\n- स्टेप 2: वहाँ ऊपर दिए गए \"Import\" (पुराना रिकॉर्ड जोड़ें) बटन को दबाइए।\n- स्टेप 3: अपने रजिस्टर के पन्ने की साफ़ फोटो (JPG/PNG), PDF फाइल, या कंप्यूटर की Excel (.xlsx) / CSV फाइल चुनिए।\n- स्टेप 4: सॉफ्टवेयर अपने आप सारे मेंबर्स के नाम, मोबाइल नंबर, तारीख और फीस पढ़कर स्क्रीन पर दिखा देगा।\n- स्टेप 5: लिस्ट को एक बार चेक कर लीजिए (कुछ बदलना हो तो वहीं ठीक कर सकते हैं) और फिर \"Save\" दबाकर सारे मेंबर एक साथ जोड़ लीजिए।",
+      "pass": true,
+      "reason": "mode=local, chars=561",
+      "raw": {
+        "answer": "पुराना डेटा (रजिस्टर की फोटो, Excel, CSV या PDF) इम्पोर्ट करना बहुत आसान है:\n- स्टेप 1: बाईं तरफ के मेन्यू में \"Members\" पेज पर क्लिक कीजिए।\n- स्टेप 2: वहाँ ऊपर दिए गए \"Import\" (पुराना रिकॉर्ड जोड़ें) बटन को दबाइए।\n- स्टेप 3: अपने रजिस्टर के पन्ने की साफ़ फोटो (JPG/PNG), PDF फाइल, या कंप्यूटर की Excel (.xlsx) / CSV फाइल चुनिए।\n- स्टेप 4: सॉफ्टवेयर अपने आप सारे मेंबर्स के नाम, मोबाइल नंबर, तारीख और फीस पढ़कर स्क्रीन पर दिखा देगा।\n- स्टेप 5: लिस्ट को एक बार चेक कर लीजिए (कुछ बदलना हो तो वहीं ठीक कर सकते हैं) और फिर \"Save\" दबाकर सारे मेंबर एक साथ जोड़ लीजिए।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 20,
+      "question": "Backup kaise download karu?",
+      "answer": "आपके जिम का डेटा पूरी तरह सुरक्षित रहता है:\n- ऑटोमैटिक बैकअप: सॉफ्टवेयर रोज़ आपके जिम के डेटा का बैकअप अपने आप सुरक्षित रखता है।\n- फाइल डाउनलोड (Export): आप \"Settings\" या \"Members\" पेज से अपने मेंबर्स और पेमेंट्स का पूरा डेटा अपने कंप्यूटर या फोन में डाउनलोड/एक्सपोर्ट कर सकते हैं।",
+      "pass": true,
+      "reason": "mode=local, chars=281",
+      "raw": {
+        "answer": "आपके जिम का डेटा पूरी तरह सुरक्षित रहता है:\n- ऑटोमैटिक बैकअप: सॉफ्टवेयर रोज़ आपके जिम के डेटा का बैकअप अपने आप सुरक्षित रखता है।\n- फाइल डाउनलोड (Export): आप \"Settings\" या \"Members\" पेज से अपने मेंबर्स और पेमेंट्स का पूरा डेटा अपने कंप्यूटर या फोन में डाउनलोड/एक्सपोर्ट कर सकते हैं।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 21,
+      "question": "Backup restore kaise hota hai?",
+      "answer": "Download किए गए backup को gym-owner screen से upload करके restore करने का option अभी नहीं है।\n- GymSaathi service owner को Accounts → Backups में retained daily snapshot चुनकर gym data restore करने का option मिलता है।\n- Restore से पहले मौजूदा data का अलग backup ज़रूर रखें; restore members, memberships, payments और attendance को snapshot वाली स्थिति पर वापस रखता है।",
+      "pass": true,
+      "reason": "mode=local, chars=367",
+      "raw": {
+        "answer": "Download किए गए backup को gym-owner screen से upload करके restore करने का option अभी नहीं है।\n- GymSaathi service owner को Accounts → Backups में retained daily snapshot चुनकर gym data restore करने का option मिलता है।\n- Restore से पहले मौजूदा data का अलग backup ज़रूर रखें; restore members, memberships, payments और attendance को snapshot वाली स्थिति पर वापस रखता है।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 22,
+      "question": "Member ki payment kaise record karu?",
+      "answer": "मेंबर की फीस (पेमेंट) जमा करने और देखने के तरीके ये हैं:\n- बोलकर या लिखकर (Assistant से): सीधा बोलिए या लिखिए, जैसे \"राहुल ने 500 दिए\", \"प्रिया के 1000 UPI से जमा कर दो\", या \"सबकी बाकी फीस जमा कर दो\"। मैं आपसे \"हाँ\" पूछकर पेमेंट दर्ज कर दूँगा।\n- Members पेज से: बाईं तरफ \"Members\" में जाकर मेंबर के नाम पर क्लिक करें, वहाँ से भी Cash या UPI पेमेंट जमा कर सकते हैं।\n- गलत पेमेंट बदलना या हटाना: अगर कोई पेमेंट गलत दर्ज हो गया है, तो \"Members\" में उस मेंबर के पेज पर जाकर पेमेंट हिस्ट्री से उसे बदल या हटा सकते हैं।\n- पूरा हिसाब देखना: सभी पेमेंट्स की लिस्ट देखने के लिए बाईं तरफ \"Payments\" टैब खोलिए, या मुझसे पूछिए \"आज कितना पैसा आया\"।",
+      "pass": true,
+      "reason": "mode=local, chars=635",
+      "raw": {
+        "answer": "मेंबर की फीस (पेमेंट) जमा करने और देखने के तरीके ये हैं:\n- बोलकर या लिखकर (Assistant से): सीधा बोलिए या लिखिए, जैसे \"राहुल ने 500 दिए\", \"प्रिया के 1000 UPI से जमा कर दो\", या \"सबकी बाकी फीस जमा कर दो\"। मैं आपसे \"हाँ\" पूछकर पेमेंट दर्ज कर दूँगा।\n- Members पेज से: बाईं तरफ \"Members\" में जाकर मेंबर के नाम पर क्लिक करें, वहाँ से भी Cash या UPI पेमेंट जमा कर सकते हैं।\n- गलत पेमेंट बदलना या हटाना: अगर कोई पेमेंट गलत दर्ज हो गया है, तो \"Members\" में उस मेंबर के पेज पर जाकर पेमेंट हिस्ट्री से उसे बदल या हटा सकते हैं।\n- पूरा हिसाब देखना: सभी पेमेंट्स की लिस्ट देखने के लिए बाईं तरफ \"Payments\" टैब खोलिए, या मुझसे पूछिए \"आज कितना पैसा आया\"।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 23,
+      "question": "Membership renew kaise karu?",
+      "answer": "किसी मेंबर की मेंबरशिप रिन्यू करने के 2 आसान तरीके हैं:\n- बोलकर या लिखकर (Assistant से): सीधा बोलिए या लिखिए, जैसे \"प्रिया को 3 महीने के लिए रिन्यू कर दो\" या \"राहुल को 6 महीने रिन्यू कर दो, 2000 जमा\"। मैं नई तारीख और फीस जोड़कर आपसे कन्फर्मेशन लूँगा।\n- Members पेज से: बाईं तरफ \"Members\" में जाकर उस मेंबर के नाम पर क्लिक करें और \"Renew\" बटन दबाएँ।\n- गलती सुधारना: अगर गलती से रिन्यू हो जाए, तो मेंबर के पेज पर जाकर ही रिन्यूअल को वापस (Undo) कर सकते हैं।",
+      "pass": true,
+      "reason": "mode=local, chars=455",
+      "raw": {
+        "answer": "किसी मेंबर की मेंबरशिप रिन्यू करने के 2 आसान तरीके हैं:\n- बोलकर या लिखकर (Assistant से): सीधा बोलिए या लिखिए, जैसे \"प्रिया को 3 महीने के लिए रिन्यू कर दो\" या \"राहुल को 6 महीने रिन्यू कर दो, 2000 जमा\"। मैं नई तारीख और फीस जोड़कर आपसे कन्फर्मेशन लूँगा।\n- Members पेज से: बाईं तरफ \"Members\" में जाकर उस मेंबर के नाम पर क्लिक करें और \"Renew\" बटन दबाएँ।\n- गलती सुधारना: अगर गलती से रिन्यू हो जाए, तो मेंबर के पेज पर जाकर ही रिन्यूअल को वापस (Undo) कर सकते हैं।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 24,
+      "question": "Member ki details update kaise karu?",
+      "answer": "मेंबर की जानकारी बदलने के लिए आप ये कर सकते हैं:\n- बोलकर या लिखकर (Assistant से): नाम, मोबाइल नंबर, उम्र, वज़न, हाइट, लक्ष्य (Goal), सेहत, बैच (सुबह/शाम) या नोट बदलने के लिए सीधा बोलिए, जैसे \"प्रिया का बैच सुबह कर दो\" या \"राहुल का वज़न 70 कर दो\"।\n- ट्रेनर, डाइट और डिस्काउंट: किसी मेंबर के प्लान में पर्सनल ट्रेनर (PT), डाइट प्लान जोड़ने/हटाने या फीस में छूट (Discount) देने के लिए \"Members\" में उस मेंबर के पेज पर जाइए।",
+      "pass": true,
+      "reason": "mode=local, chars=420",
+      "raw": {
+        "answer": "मेंबर की जानकारी बदलने के लिए आप ये कर सकते हैं:\n- बोलकर या लिखकर (Assistant से): नाम, मोबाइल नंबर, उम्र, वज़न, हाइट, लक्ष्य (Goal), सेहत, बैच (सुबह/शाम) या नोट बदलने के लिए सीधा बोलिए, जैसे \"प्रिया का बैच सुबह कर दो\" या \"राहुल का वज़न 70 कर दो\"।\n- ट्रेनर, डाइट और डिस्काउंट: किसी मेंबर के प्लान में पर्सनल ट्रेनर (PT), डाइट प्लान जोड़ने/हटाने या फीस में छूट (Discount) देने के लिए \"Members\" में उस मेंबर के पेज पर जाइए।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 25,
+      "question": "Member delete kaise karu?",
+      "answer": "मेंबर को हटाने और वापस लाने का तरीका यह है:\n- मेंबर हटाना (Delete): मुझसे बोलिए \"राहुल को हटा दो\" (और फिर \"हाँ\" बोलें), या \"Members\" में उस मेंबर के पेज पर जाकर Delete बटन दबाएँ।\n- वापस लाना (Restore): हटाया गया मेंबर 30 दिन तक सुरक्षित रहता है। बाईं तरफ \"Members\" पेज में ऊपर \"Deleted\" टैब पर क्लिक करें और वहाँ से उसे वापस लाएँ।",
+      "pass": true,
+      "reason": "mode=local, chars=330",
+      "raw": {
+        "answer": "मेंबर को हटाने और वापस लाने का तरीका यह है:\n- मेंबर हटाना (Delete): मुझसे बोलिए \"राहुल को हटा दो\" (और फिर \"हाँ\" बोलें), या \"Members\" में उस मेंबर के पेज पर जाकर Delete बटन दबाएँ।\n- वापस लाना (Restore): हटाया गया मेंबर 30 दिन तक सुरक्षित रहता है। बाईं तरफ \"Members\" पेज में ऊपर \"Deleted\" टैब पर क्लिक करें और वहाँ से उसे वापस लाएँ।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 26,
+      "question": "WhatsApp reminder kaise bheju?",
+      "answer": "बाकी फीस और खत्म हो रही मेंबरशिप के व्हाट्सऐप रिमाइंडर आप ऐसे भेज सकते हैं:\n- किसी एक मेंबर को (Assistant से): मुझसे बोलिए \"राहुल को रिमाइंडर भेजो\"। मैं मैसेज तैयार करके बटन दे दूँगा, जिसे दबाते ही व्हाट्सऐप खुल जाएगा।\n- सभी मेंबर्स को (Dashboard से): बाईं तरफ \"Dashboard\" पर जाइए। वहाँ आज के सारे पेंडिंग फीस और एक्सपायरी रिमाइंडर दिखते हैं, जहाँ से आप एक-एक टैप में सबको व्हाट्सऐप भेज सकते हैं।",
+      "pass": true,
+      "reason": "mode=local, chars=396",
+      "raw": {
+        "answer": "बाकी फीस और खत्म हो रही मेंबरशिप के व्हाट्सऐप रिमाइंडर आप ऐसे भेज सकते हैं:\n- किसी एक मेंबर को (Assistant से): मुझसे बोलिए \"राहुल को रिमाइंडर भेजो\"। मैं मैसेज तैयार करके बटन दे दूँगा, जिसे दबाते ही व्हाट्सऐप खुल जाएगा।\n- सभी मेंबर्स को (Dashboard से): बाईं तरफ \"Dashboard\" पर जाइए। वहाँ आज के सारे पेंडिंग फीस और एक्सपायरी रिमाइंडर दिखते हैं, जहाँ से आप एक-एक टैप में सबको व्हाट्सऐप भेज सकते हैं।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 27,
+      "question": "Dashboard mein kya dikhta hai?",
+      "answer": "जिम का पूरा हिसाब-किताब और रिपोर्ट देखने के तरीके ये हैं:\n- मुझसे पूछकर (Assistant में): आप सीधा पूछ सकते हैं—\"आज कितना पैसा आया?\", \"पिछले महीने का कलेक्शन बताओ\", \"किसकी फीस बाकी है?\", \"अगले 7 दिन में किसकी मेंबरशिप खत्म हो रही है?\", या किसी तारीख का हिसाब जैसे \"1 Oct से 14 Oct तक कितना पैसा आया\"।\n- Dashboard से: बाईं तरफ \"Dashboard\" पर कुल मेंबर, चालू मेंबर, खत्म हो रही मेंबरशिप, बाकी फीस और आज के रिमाइंडर एक नज़र में दिखते हैं।\n- Members और Payments पेज से: \"Members\" में आप Active, Expiring, Expired या Due के हिसाब से लिस्ट देख सकते हैं, और \"Payments\" में हर भुगतान का रिकॉर्ड देख सकते हैं।",
+      "pass": true,
+      "reason": "mode=local, chars=598",
+      "raw": {
+        "answer": "जिम का पूरा हिसाब-किताब और रिपोर्ट देखने के तरीके ये हैं:\n- मुझसे पूछकर (Assistant में): आप सीधा पूछ सकते हैं—\"आज कितना पैसा आया?\", \"पिछले महीने का कलेक्शन बताओ\", \"किसकी फीस बाकी है?\", \"अगले 7 दिन में किसकी मेंबरशिप खत्म हो रही है?\", या किसी तारीख का हिसाब जैसे \"1 Oct से 14 Oct तक कितना पैसा आया\"।\n- Dashboard से: बाईं तरफ \"Dashboard\" पर कुल मेंबर, चालू मेंबर, खत्म हो रही मेंबरशिप, बाकी फीस और आज के रिमाइंडर एक नज़र में दिखते हैं।\n- Members और Payments पेज से: \"Members\" में आप Active, Expiring, Expired या Due के हिसाब से लिस्ट देख सकते हैं, और \"Payments\" में हर भुगतान का रिकॉर्ड देख सकते हैं।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 28,
+      "question": "QR code scan karne par attendance kaise mark hoti hai?",
+      "answer": "GymSaathi का Member QR code attendance और नए member registration—दोनों के लिए है:\n- QR link Settings में \"Member QR code\" section से खोलें या print करें। हर gym का QR link अलग होता है।\n- जिस device पर पहले से QR session नहीं है, पहली scan पर registration form खुलेगा। नया member form भरेगा; पहले से दर्ज mobile + वही registered full name देने पर existing record पहचाना जाएगा—duplicate member नहीं बनेगा।\n- सफल registration/verification के बाद secure HttpOnly cookie उसी browser को याद रखती है। अगली scans में नाम या mobile फिर नहीं माँगा जाता; active membership पर attendance अपने आप mark होती है।\n- नए registration की fee pending रहती है और QR form payment record नहीं करता। Same-day repeat scan पर दूसरी attendance entry नहीं बनती।\n- Membership expired/not active हो तो attendance mark नहीं होती। Shared device पर \"Switch member\" दबाकर अगला member verify करें।\n- Dashboard पर \"Today's attendance\" में हर member का नाम, mobile, check-in time और ✓ Present दिखता है।",
+      "pass": true,
+      "reason": "mode=local, chars=965",
+      "raw": {
+        "answer": "GymSaathi का Member QR code attendance और नए member registration—दोनों के लिए है:\n- QR link Settings में \"Member QR code\" section से खोलें या print करें। हर gym का QR link अलग होता है।\n- जिस device पर पहले से QR session नहीं है, पहली scan पर registration form खुलेगा। नया member form भरेगा; पहले से दर्ज mobile + वही registered full name देने पर existing record पहचाना जाएगा—duplicate member नहीं बनेगा।\n- सफल registration/verification के बाद secure HttpOnly cookie उसी browser को याद रखती है। अगली scans में नाम या mobile फिर नहीं माँगा जाता; active membership पर attendance अपने आप mark होती है।\n- नए registration की fee pending रहती है और QR form payment record नहीं करता। Same-day repeat scan पर दूसरी attendance entry नहीं बनती।\n- Membership expired/not active हो तो attendance mark नहीं होती। Shared device पर \"Switch member\" दबाकर अगला member verify करें।\n- Dashboard पर \"Today's attendance\" में हर member का नाम, mobile, check-in time और ✓ Present दिखता है।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 29,
+      "question": "QR scan do baar karu to duplicate attendance banegi?",
+      "answer": "एक ही दिन में किसी member की दोबारा QR scan करने पर दूसरी attendance entry नहीं बनती। पहले से मौजूद check-in सुरक्षित रहता है और result में “Already checked in” दिखता है। अगले दिन active membership होने पर नई date की attendance mark हो सकती है।",
+      "pass": true,
+      "reason": "mode=local, chars=244",
+      "raw": {
+        "answer": "एक ही दिन में किसी member की दोबारा QR scan करने पर दूसरी attendance entry नहीं बनती। पहले से मौजूद check-in सुरक्षित रहता है और result में “Already checked in” दिखता है। अगले दिन active membership होने पर नई date की attendance mark हो सकती है।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 30,
+      "question": "Expired member ki attendance mark hogi?",
+      "answer": "नहीं। Membership आज active नहीं है—expired, inactive या आज की start date अभी नहीं आई—तो QR check-in attendance record नहीं बनाता। Renewal या membership dates gym desk से verify करवाएँ, फिर QR दोबारा scan करें।",
+      "pass": true,
+      "reason": "mode=local, chars=209",
+      "raw": {
+        "answer": "नहीं। Membership आज active नहीं है—expired, inactive या आज की start date अभी नहीं आई—तो QR check-in attendance record नहीं बनाता। Renewal या membership dates gym desk से verify करवाएँ, फिर QR दोबारा scan करें।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 31,
+      "question": "Invalid QR token par kya hoga?",
+      "answer": "QR link invalid दिखे तो उस link से check-in नहीं हो पाएगा।\n- Gym owner अपने GymSaathi login में Settings → Member QR code से नया/current link खोलकर copy या print करें।\n- पूरा link scan/open करें; पुराने या दूसरे gym का QR इस्तेमाल न करें। फिर भी समस्या हो तो gym desk/owner से link verify करवाएँ।",
+      "pass": true,
+      "reason": "mode=local, chars=296",
+      "raw": {
+        "answer": "QR link invalid दिखे तो उस link से check-in नहीं हो पाएगा।\n- Gym owner अपने GymSaathi login में Settings → Member QR code से नया/current link खोलकर copy या print करें।\n- पूरा link scan/open करें; पुराने या दूसरे gym का QR इस्तेमाल न करें। फिर भी समस्या हो तो gym desk/owner से link verify करवाएँ।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 32,
+      "question": "Agar mobile number already registered hai to kya karu?",
+      "answer": "अगर पहली बार QR खोलने पर registration form दिख रहा है और आप पहले से member हैं, तो वही registered full name और mobile number भरें।\n- नाम और mobile existing record से match होंगे तो GymSaathi नया duplicate member बनाए बिना उसी member की attendance mark करेगा।\n- Match न हो तो “Already a member? Verify check-in” दबाकर registered details verify करें; बार-बार नया registration submit न करें।\n- सफल first verification के बाद वही browser/device याद रखा जाता है और अगली scans पर mobile दोबारा नहीं माँगा जाता।",
+      "pass": true,
+      "reason": "mode=local, chars=503",
+      "raw": {
+        "answer": "अगर पहली बार QR खोलने पर registration form दिख रहा है और आप पहले से member हैं, तो वही registered full name और mobile number भरें।\n- नाम और mobile existing record से match होंगे तो GymSaathi नया duplicate member बनाए बिना उसी member की attendance mark करेगा।\n- Match न हो तो “Already a member? Verify check-in” दबाकर registered details verify करें; बार-बार नया registration submit न करें।\n- सफल first verification के बाद वही browser/device याद रखा जाता है और अगली scans पर mobile दोबारा नहीं माँगा जाता।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 33,
+      "question": "What can GymSaathi do?",
+      "answer": "मैं GymSaathi का असिस्टेंट हूँ। आप मुझसे बोलकर या लिखकर अपने पूरे जिम का काम करवा सकते हैं और किसी भी फीचर के बारे में पूछ सकते हैं:\n- नया मेंबर बनाना: \"नया मेंबर जोड़ो\" बोलिए, या \"Members\" पेज में \"+ New member\" दबाइए (पूरा तरीका जानने के लिए पूछें: \"मेंबर कैसे बनते हैं\")।\n- पुराना डेटा इम्पोर्ट करना: \"Members\" पेज में \"Import\" से रजिस्टर की फोटो, PDF या Excel फाइल अपलोड करें (पूछें: \"पुराना डेटा इम्पोर्ट कैसे करें\")।\n- फीस जमा करना: बोलिए \"राहुल ने 500 दिए\" या \"राहुल के 1000 UPI से जमा कर दो\"।\n- मेंबरशिप रिन्यू करना: बोलिए \"प्रिया को 3 महीने के लिए रिन्यू कर दो\"।\n- जानकारी बदलना या मेंबर हटाना: बोलिए \"दिनेश का बैच सुबह कर दो\" या \"राहुल को हटा दो\" (हटाए गए मेंबर 30 दिन तक \"Members\" के \"Deleted\" टैब से वापस आ सकते हैं)।\n- व्हाट्सऐप रिमाइंडर: बोलिए \"राहुल को रिमाइंडर भेजो\", या पूछिए \"आज किन-किन को रिमाइंडर गए हैं?\"।\n- हिसाब और रिपोर्ट पूछना: पूछिए \"किसकी फीस बाकी है?\", \"किसकी मेंबरशिप खत्म हो रही है?\", \"आज कितना पैसा आया?\" या किसी मेंबर का नाम/नंबर बोलिए।\n- जिम की सेटिंग्स: फीस के रेट, जिम का समय और UPI ID बदलने के लिए बाईं तरफ \"Settings\" में जाएँ।",
+      "pass": true,
+      "reason": "mode=local, chars=1063",
+      "raw": {
+        "answer": "मैं GymSaathi का असिस्टेंट हूँ। आप मुझसे बोलकर या लिखकर अपने पूरे जिम का काम करवा सकते हैं और किसी भी फीचर के बारे में पूछ सकते हैं:\n- नया मेंबर बनाना: \"नया मेंबर जोड़ो\" बोलिए, या \"Members\" पेज में \"+ New member\" दबाइए (पूरा तरीका जानने के लिए पूछें: \"मेंबर कैसे बनते हैं\")।\n- पुराना डेटा इम्पोर्ट करना: \"Members\" पेज में \"Import\" से रजिस्टर की फोटो, PDF या Excel फाइल अपलोड करें (पूछें: \"पुराना डेटा इम्पोर्ट कैसे करें\")।\n- फीस जमा करना: बोलिए \"राहुल ने 500 दिए\" या \"राहुल के 1000 UPI से जमा कर दो\"।\n- मेंबरशिप रिन्यू करना: बोलिए \"प्रिया को 3 महीने के लिए रिन्यू कर दो\"।\n- जानकारी बदलना या मेंबर हटाना: बोलिए \"दिनेश का बैच सुबह कर दो\" या \"राहुल को हटा दो\" (हटाए गए मेंबर 30 दिन तक \"Members\" के \"Deleted\" टैब से वापस आ सकते हैं)।\n- व्हाट्सऐप रिमाइंडर: बोलिए \"राहुल को रिमाइंडर भेजो\", या पूछिए \"आज किन-किन को रिमाइंडर गए हैं?\"।\n- हिसाब और रिपोर्ट पूछना: पूछिए \"किसकी फीस बाकी है?\", \"किसकी मेंबरशिप खत्म हो रही है?\", \"आज कितना पैसा आया?\" या किसी मेंबर का नाम/नंबर बोलिए।\n- जिम की सेटिंग्स: फीस के रेट, जिम का समय और UPI ID बदलने के लिए बाईं तरफ \"Settings\" में जाएँ।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 34,
+      "question": "How do I add a member?",
+      "answer": "नया मेंबर आप 3 आसान तरीकों से बना (जोड़) सकते हैं:\n- बोलकर या लिखकर (Assistant से): यहीं चैट में \"नया मेंबर जोड़ो\" बोलिए या लिखिए, या ऊपर \"+ New member\" बटन दबाइए। मैं एक-एक करके नाम, मोबाइल नंबर, प्लान और फीस पूछकर फॉर्म भर दूँगा।\n- सीधा फॉर्म भरकर (Members पेज से): बाईं तरफ \"Members\" टैब में जाइए और \"+ New member\" बटन दबाकर फॉर्म भर दीजिए।\n- पुराने मेंबर जैसी डिटेल भरना: रजिस्ट्रेशन करते समय आप \"राहुल जैसी डिटेल भर दो\" भी बोल सकते हैं, जिससे बैच और प्लान जैसी जानकारी अपने आप भर जाएगी।\n- पुराना रिकॉर्ड अपलोड करके: अगर रजिस्टर या Excel से कई मेंबर एक साथ जोड़ने हैं, तो \"Members\" पेज में \"Import\" का इस्तेमाल करें।",
+      "pass": true,
+      "reason": "mode=local, chars=620",
+      "raw": {
+        "answer": "नया मेंबर आप 3 आसान तरीकों से बना (जोड़) सकते हैं:\n- बोलकर या लिखकर (Assistant से): यहीं चैट में \"नया मेंबर जोड़ो\" बोलिए या लिखिए, या ऊपर \"+ New member\" बटन दबाइए। मैं एक-एक करके नाम, मोबाइल नंबर, प्लान और फीस पूछकर फॉर्म भर दूँगा।\n- सीधा फॉर्म भरकर (Members पेज से): बाईं तरफ \"Members\" टैब में जाइए और \"+ New member\" बटन दबाकर फॉर्म भर दीजिए।\n- पुराने मेंबर जैसी डिटेल भरना: रजिस्ट्रेशन करते समय आप \"राहुल जैसी डिटेल भर दो\" भी बोल सकते हैं, जिससे बैच और प्लान जैसी जानकारी अपने आप भर जाएगी।\n- पुराना रिकॉर्ड अपलोड करके: अगर रजिस्टर या Excel से कई मेंबर एक साथ जोड़ने हैं, तो \"Members\" पेज में \"Import\" का इस्तेमाल करें।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 35,
+      "question": "How to import Excel?",
+      "answer": "पुराना डेटा (रजिस्टर की फोटो, Excel, CSV या PDF) इम्पोर्ट करना बहुत आसान है:\n- स्टेप 1: बाईं तरफ के मेन्यू में \"Members\" पेज पर क्लिक कीजिए।\n- स्टेप 2: वहाँ ऊपर दिए गए \"Import\" (पुराना रिकॉर्ड जोड़ें) बटन को दबाइए।\n- स्टेप 3: अपने रजिस्टर के पन्ने की साफ़ फोटो (JPG/PNG), PDF फाइल, या कंप्यूटर की Excel (.xlsx) / CSV फाइल चुनिए।\n- स्टेप 4: सॉफ्टवेयर अपने आप सारे मेंबर्स के नाम, मोबाइल नंबर, तारीख और फीस पढ़कर स्क्रीन पर दिखा देगा।\n- स्टेप 5: लिस्ट को एक बार चेक कर लीजिए (कुछ बदलना हो तो वहीं ठीक कर सकते हैं) और फिर \"Save\" दबाकर सारे मेंबर एक साथ जोड़ लीजिए।",
+      "pass": true,
+      "reason": "mode=local, chars=561",
+      "raw": {
+        "answer": "पुराना डेटा (रजिस्टर की फोटो, Excel, CSV या PDF) इम्पोर्ट करना बहुत आसान है:\n- स्टेप 1: बाईं तरफ के मेन्यू में \"Members\" पेज पर क्लिक कीजिए।\n- स्टेप 2: वहाँ ऊपर दिए गए \"Import\" (पुराना रिकॉर्ड जोड़ें) बटन को दबाइए।\n- स्टेप 3: अपने रजिस्टर के पन्ने की साफ़ फोटो (JPG/PNG), PDF फाइल, या कंप्यूटर की Excel (.xlsx) / CSV फाइल चुनिए।\n- स्टेप 4: सॉफ्टवेयर अपने आप सारे मेंबर्स के नाम, मोबाइल नंबर, तारीख और फीस पढ़कर स्क्रीन पर दिखा देगा।\n- स्टेप 5: लिस्ट को एक बार चेक कर लीजिए (कुछ बदलना हो तो वहीं ठीक कर सकते हैं) और फिर \"Save\" दबाकर सारे मेंबर एक साथ जोड़ लीजिए।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 36,
+      "question": "How do I set gym prices?",
+      "answer": "जिम की फीस, समय और अन्य सेटिंग्स बदलने का तरीका यह है:\n- बाईं तरफ के मेन्यू में \"Settings\" टैब पर क्लिक कीजिए।\n- मेंबरशिप फीस: वहाँ 1 महीना, 3 महीने, 6 महीने और 1 साल के प्लान की फीस, और पर्सनल ट्रेनर व डाइट प्लान की मासिक फीस भरें।\n- जिम की जानकारी: वहीं पर जिम का नाम, मालिक का नाम, खुलने-बंद होने का समय (Timings) और सुविधाएँ (Amenities) लिख सकते हैं।\n- UPI ID: अपनी UPI ID भरने से व्हाट्सऐप फीस रिमाइंडर में मेंबर्स को सीधा आपकी UPI ID भी चली जाएगी।\n- सब भरने के बाद नीचे \"Save\" बटन दबा दीजिए।",
+      "pass": true,
+      "reason": "mode=local, chars=497",
+      "raw": {
+        "answer": "जिम की फीस, समय और अन्य सेटिंग्स बदलने का तरीका यह है:\n- बाईं तरफ के मेन्यू में \"Settings\" टैब पर क्लिक कीजिए।\n- मेंबरशिप फीस: वहाँ 1 महीना, 3 महीने, 6 महीने और 1 साल के प्लान की फीस, और पर्सनल ट्रेनर व डाइट प्लान की मासिक फीस भरें।\n- जिम की जानकारी: वहीं पर जिम का नाम, मालिक का नाम, खुलने-बंद होने का समय (Timings) और सुविधाएँ (Amenities) लिख सकते हैं।\n- UPI ID: अपनी UPI ID भरने से व्हाट्सऐप फीस रिमाइंडर में मेंबर्स को सीधा आपकी UPI ID भी चली जाएगी।\n- सब भरने के बाद नीचे \"Save\" बटन दबा दीजिए।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 37,
+      "question": "How to send WhatsApp reminder?",
+      "answer": "बाकी फीस और खत्म हो रही मेंबरशिप के व्हाट्सऐप रिमाइंडर आप ऐसे भेज सकते हैं:\n- किसी एक मेंबर को (Assistant से): मुझसे बोलिए \"राहुल को रिमाइंडर भेजो\"। मैं मैसेज तैयार करके बटन दे दूँगा, जिसे दबाते ही व्हाट्सऐप खुल जाएगा।\n- सभी मेंबर्स को (Dashboard से): बाईं तरफ \"Dashboard\" पर जाइए। वहाँ आज के सारे पेंडिंग फीस और एक्सपायरी रिमाइंडर दिखते हैं, जहाँ से आप एक-एक टैप में सबको व्हाट्सऐप भेज सकते हैं।",
+      "pass": true,
+      "reason": "mode=local, chars=396",
+      "raw": {
+        "answer": "बाकी फीस और खत्म हो रही मेंबरशिप के व्हाट्सऐप रिमाइंडर आप ऐसे भेज सकते हैं:\n- किसी एक मेंबर को (Assistant से): मुझसे बोलिए \"राहुल को रिमाइंडर भेजो\"। मैं मैसेज तैयार करके बटन दे दूँगा, जिसे दबाते ही व्हाट्सऐप खुल जाएगा।\n- सभी मेंबर्स को (Dashboard से): बाईं तरफ \"Dashboard\" पर जाइए। वहाँ आज के सारे पेंडिंग फीस और एक्सपायरी रिमाइंडर दिखते हैं, जहाँ से आप एक-एक टैप में सबको व्हाट्सऐप भेज सकते हैं।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 38,
+      "question": "How do I see members whose fee is pending?",
+      "answer": "बाकी फीस वाले मेंबर देखने के 2 तरीके हैं:\n- Assistant में पूछें: \"किसकी फीस बाकी है?\" — जवाब में सिर्फ़ ₹0 से ज़्यादा बाकी वाले मेंबर आने चाहिए।\n- Members पेज खोलें और \"Fees pending\" / \"Due\" टैब चुनें। यहाँ पूरा बाकी अमाउंट ₹0 से ज़्यादा वालों के लिए दिखता है।",
+      "pass": true,
+      "reason": "mode=local, chars=260",
+      "raw": {
+        "answer": "बाकी फीस वाले मेंबर देखने के 2 तरीके हैं:\n- Assistant में पूछें: \"किसकी फीस बाकी है?\" — जवाब में सिर्फ़ ₹0 से ज़्यादा बाकी वाले मेंबर आने चाहिए।\n- Members पेज खोलें और \"Fees pending\" / \"Due\" टैब चुनें। यहाँ पूरा बाकी अमाउंट ₹0 से ज़्यादा वालों के लिए दिखता है।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 39,
+      "question": "What are my gym timings?",
+      "answer": "जिम का समय: 5 AM to 10 PM।",
+      "pass": true,
+      "reason": "mode=local, chars=26",
+      "raw": {
+        "answer": "जिम का समय: 5 AM to 10 PM।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 40,
+      "question": "Muskan Arora ka mobile number kya hai?",
+      "answer": "Muskan Arora का मोबाइल नंबर: 9876543214।\n- नाम: Muskan Arora\n- मोबाइल: 9876543214\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹200\n- बाकी: ₹300",
+      "pass": true,
+      "reason": "mode=local, chars=194",
+      "raw": {
+        "answer": "Muskan Arora का मोबाइल नंबर: 9876543214।\n- नाम: Muskan Arora\n- मोबाइल: 9876543214\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹200\n- बाकी: ₹300",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 41,
+      "question": "1234567890 kis member ka number hai?",
+      "answer": "इस मोबाइल नंबर से कोई मेंबर नहीं मिला। नंबर जाँच लें या Members पेज में खोजें।",
+      "pass": true,
+      "reason": "mode=local, chars=78",
+      "raw": {
+        "answer": "इस मोबाइल नंबर से कोई मेंबर नहीं मिला। नंबर जाँच लें या Members पेज में खोजें।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 42,
+      "question": "Rahul Sharma ka status kya hai?",
+      "answer": "Rahul Sharma की मेंबरशिप 17 Jan 2027 तक है, और ₹300 बाकी है।\n- नाम: Rahul Sharma\n- मोबाइल: 9876543213\n- मेंबरशिप: 18 Oct 2026 से 17 Jan 2027 (3 महीने)\n- स्थिति: चालू (91 दिन बाकी)\n- फीस: ₹1,300, जमा ₹1,000\n- बाकी: ₹300",
+      "pass": true,
+      "reason": "mode=local, chars=218",
+      "raw": {
+        "answer": "Rahul Sharma की मेंबरशिप 17 Jan 2027 तक है, और ₹300 बाकी है।\n- नाम: Rahul Sharma\n- मोबाइल: 9876543213\n- मेंबरशिप: 18 Oct 2026 से 17 Jan 2027 (3 महीने)\n- स्थिति: चालू (91 दिन बाकी)\n- फीस: ₹1,300, जमा ₹1,000\n- बाकी: ₹300",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 43,
+      "question": "Kya Priya ki membership active hai?",
+      "answer": "Priya Jain की मेंबरशिप 17 Nov 2026 तक है, और कोई फीस बाकी नहीं है।\n- नाम: Priya Jain\n- मोबाइल: 9876543212\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹500\n- बाकी: ₹0",
+      "pass": true,
+      "reason": "mode=local, chars=216",
+      "raw": {
+        "answer": "Priya Jain की मेंबरशिप 17 Nov 2026 तक है, और कोई फीस बाकी नहीं है।\n- नाम: Priya Jain\n- मोबाइल: 9876543212\n- मेंबरशिप: 18 Oct 2026 से 17 Nov 2026 (1 महीना)\n- स्थिति: चालू (30 दिन बाकी)\n- फीस: ₹500, जमा ₹500\n- बाकी: ₹0",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 44,
+      "question": "Aaj kiski attendance lagi?",
+      "answer": "आज 1 मेंबर की attendance mark हुई है:\n- Aman Singh: 01:42 am — ✓ Present",
+      "pass": true,
+      "reason": "mode=local, chars=72",
+      "raw": {
+        "answer": "आज 1 मेंबर की attendance mark हुई है:\n- Aman Singh: 01:42 am — ✓ Present",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 45,
+      "question": "Kis member ne aaj attendance lagayi?",
+      "answer": "आज 1 मेंबर की attendance mark हुई है:\n- Aman Singh: 01:42 am — ✓ Present",
+      "pass": true,
+      "reason": "mode=local, chars=72",
+      "raw": {
+        "answer": "आज 1 मेंबर की attendance mark हुई है:\n- Aman Singh: 01:42 am — ✓ Present",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 46,
+      "question": "Aman ne 500 diye",
+      "answer": "Aman Singh (9876543211) के ₹500 कैश में जमा करूँ?",
+      "pass": true,
+      "reason": "mode=local, chars=49",
+      "raw": {
+        "answer": "Aman Singh (9876543211) के ₹500 कैश में जमा करूँ?",
+        "pending": {
+          "do": "pay",
+          "id": "19e638912f940aae",
+          "body": {
+            "amount": 500,
+            "mode": "Cash"
+          }
+        },
+        "mode": "local"
+      }
+    },
+    {
+      "n": 47,
+      "question": "Aman Singh ko 3 mahine renew kar do",
+      "answer": "Aman Singh (9876543211) की मेंबरशिप 3 महीने के लिए रिन्यू करूँ?\n- 18 Nov 2026 से 17 Feb 2027\n- फीस: ₹1,300\n- पिछला बाकी: ₹500\n- अभी जमा: ₹0",
+      "pass": true,
+      "reason": "mode=local, chars=139",
+      "raw": {
+        "answer": "Aman Singh (9876543211) की मेंबरशिप 3 महीने के लिए रिन्यू करूँ?\n- 18 Nov 2026 से 17 Feb 2027\n- फीस: ₹1,300\n- पिछला बाकी: ₹500\n- अभी जमा: ₹0",
+        "pending": {
+          "do": "renew",
+          "id": "19e638912f940aae",
+          "body": {
+            "months": 3,
+            "paid": 0,
+            "mode": "Cash",
+            "start": "2026-11-18"
+          }
+        },
+        "mode": "local"
+      }
+    },
+    {
+      "n": 48,
+      "question": "Aman Singh ko reminder bhejo",
+      "answer": "Aman Singh के लिए बाकी फीस का रिमाइंडर तैयार है। नीचे का बटन दबाइए, व्हाट्सऐप खुल जाएगा।",
+      "pass": true,
+      "reason": "mode=local, chars=88",
+      "raw": {
+        "answer": "Aman Singh के लिए बाकी फीस का रिमाइंडर तैयार है। नीचे का बटन दबाइए, व्हाट्सऐप खुल जाएगा।",
+        "remind": {
+          "id": "19e638912f940aae",
+          "type": "fees"
+        },
+        "mode": "local"
+      }
+    },
+    {
+      "n": 49,
+      "question": "Thanks",
+      "answer": "आपका स्वागत है। और कुछ पूछना हो तो बताइए।",
+      "pass": true,
+      "reason": "mode=local, chars=41",
+      "raw": {
+        "answer": "आपका स्वागत है। और कुछ पूछना हो तो बताइए।",
+        "mode": "local"
+      }
+    },
+    {
+      "n": 50,
+      "question": "Member QR code ka link kahan milega?",
+      "answer": "GymSaathi login खोलें → Settings → \"Member QR code\" section. वहाँ QR link copy करें या QR image open/print करें। हर gym का QR अलग है।",
+      "pass": true,
+      "reason": "mode=local, chars=133",
+      "raw": {
+        "answer": "GymSaathi login खोलें → Settings → \"Member QR code\" section. वहाँ QR link copy करें या QR image open/print करें। हर gym का QR अलग है।",
+        "mode": "local"
+      }
+    }
+  ]
+}

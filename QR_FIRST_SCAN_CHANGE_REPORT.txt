@@ -1,0 +1,31 @@
+GymSaathi — QR First Scan Registration Change / Local QA Report
+==============================================================
+
+Change requested
+----------------
+A device with no valid remembered QR session should see the registration form immediately, rather than first seeing a name/mobile lookup form. New users register and receive first-day attendance when their new membership is active. An already-registered member entering their current registered name + mobile in that form should be matched to the existing record, marked present if active, and not duplicated. Subsequent scans on the same browser use the secure cookie and do not ask for name/mobile. Dashboard attendance shows ✓ Present, name, mobile and check-in time.
+
+Implementation
+--------------
+- The no-cookie GET still returns `first_visit`, but the client now opens `#registerPanel` immediately when at least one membership plan is configured.
+- The registration mobile input is editable.
+- The server checks the same-gym phone record before validating the new-member plan. If a live existing record with that number has the matching registered full name, it creates a QR session for that existing member and runs the normal active-membership attendance check instead of writing another customer or membership.
+- If the number exists but the name mismatches, server returns HTTP 409 with an explanatory error, to block duplicate/impersonation attempts through this flow.
+- The page offers “Already a member? Verify check-in” to move to the dedicated name/mobile verification route.
+- The regular new-member path still stores the member, membership, zero paid, session record and first attendance only when active; repeat scan is auto-recognized by cookie.
+
+Local automated results
+-----------------------
+- E2E integration: 44/44 passed.
+- QR edge-case test suite: 23/23 passed.
+- Sequential assistant prompt suite: 50/50 assertions passed using local fallback with Gemini API key removed.
+- Aggregate: 117/117 automated assertions passed locally.
+- JavaScript syntax checks: all included `.js` source/test files passed `node --check`.
+
+Important distinction
+--------------------
+These are isolated, local tests, not live provider tests. No claim is made that Render, the production database, a physical phone camera, Gemini API, or WhatsApp send-through were exercised. A staging deployment and real-device scan are still required before production rollout.
+
+Security note
+-------------
+The cookie secret is random and HttpOnly; its hash is stored against gym + member in the server database. The first form can still recognize an existing member with name + phone matching, which is not OTP-level identity proof. Consider adding SMS/WhatsApp OTP or a staff-issued activation code before relying on this for strong identity assurance.

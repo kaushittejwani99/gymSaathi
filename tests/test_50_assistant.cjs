@@ -71,7 +71,7 @@ async function main(){
    ['QR scan do baar karu to duplicate attendance banegi?',/दूसरी attendance entry नहीं बनती[\s\S]*Already checked in/],
    ['Expired member ki attendance mark hogi?',/Membership आज active नहीं है[\s\S]*attendance record नहीं बनाता/],
    ['Invalid QR token par kya hoga?',/QR link invalid दिखे[\s\S]*Settings → Member QR code/],
-   ['Agar mobile number already registered hai to kya karu?',/mobile number पहले से दर्ज है[\s\S]*duplicate member/],
+   ['Agar mobile number already registered hai to kya karu?',/पहली बार QR[\s\S]*duplicate member/],
    ['What can GymSaathi do?',/GymSaathi|मेंबर|जिम|फीस/],
    ['How do I add a member?',/Members|मेंबर|Assistant|New member/i],
    ['How to import Excel?',/Excel|Import|इम्पोर्ट/],

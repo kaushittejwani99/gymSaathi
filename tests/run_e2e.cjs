@@ -51,9 +51,11 @@ async function main(){
    dataR=await req('/api/data',{cookie:gymCookie});
    ok('Settings persist across GET /api/data',dataR.json.gym?.staff?.[0]?.name==='Rohit Sharma' && dataR.json.gym?.price1===500,`staff=${dataR.json.gym?.staff?.length||0}`);
    const page=await req(`/join/${token}`);
-   ok('public QR page loads and is limited join page',page.res.status===200 && page.text.includes('New member registration') && !page.text.includes('href="#/dashboard"'),`status=${page.res.status}`);
+   ok('public QR page loads and is limited join page',page.res.status===200 && page.text.includes('First-time QR registration') && !page.text.includes('href="#/dashboard"'),`status=${page.res.status}`);
+   const joinJs=await req('/join.js');
+   ok('first scan UI is wired to open registration before manual lookup',joinJs.res.status===200 && joinJs.text.includes("visible('#registerPanel')") && joinJs.text.includes("result.canRegister && plans.length"),`status=${joinJs.res.status}`);
    const first=await req(`/api/public/join/${token}`);
-   ok('first scan has no member cookie -> first_visit',first.res.status===200 && first.json.status==='first_visit',`status=${first.res.status} response=${JSON.stringify(first.json)}`);
+   ok('first scan with no saved cookie returns first_visit so UI can show registration',first.res.status===200 && first.json.status==='first_visit' && first.json.canRegister===true,`status=${first.res.status} response=${JSON.stringify(first.json)}`);
    const createdMember=await req('/api/members',{method:'POST',cookie:gymCookie,body:{name:'Existing Active',phone:'9876543211',months:1,paid:0,start:indiaDay()}});
    ok('normal member registration saves via backend',createdMember.res.status===200 && createdMember.json.name==='Existing Active',`status=${createdMember.res.status}`);
    const lookup=await req(`/api/public/join/${token}/lookup`,{method:'POST',body:{name:'Existing Active',phone:'9876543211'}});
@@ -64,6 +66,26 @@ async function main(){
    let after=await req('/api/data',{cookie:gymCookie});
    const nAttendance=(after.json.attendance||[]).filter(x=>x.id===createdMember.json.id).length;
    ok('dashboard data reflects QR attendance exactly once',nAttendance===1,`member rows=${after.json.members?.length}; attendance matches=${nAttendance}`);
+
+   // A member whose record already exists but has no QR cookie opens the registration form first.
+   // Submitting the same registered full name + mobile must recognize that record, not add a duplicate.
+   const beforeFormMember=await req('/api/data',{cookie:gymCookie});
+   const formExisting=await req('/api/members',{method:'POST',cookie:gymCookie,body:{name:'Existing Via First Form',phone:'9876543220',months:1,paid:0,start:indiaDay()}});
+   const formExistingResult=await req(`/api/public/join/${token}/register`,{method:'POST',body:{name:'Existing Via First Form',phone:'9876543220',months:1,accept:true}});
+   const formExistingCookie=parseCookie(formExistingResult.res,`gs_member_${token}`);
+   const afterFormExisting=await req('/api/data',{cookie:gymCookie});
+   ok('registration-form submit recognizes existing member rather than duplicating',formExisting.res.status===200 && formExistingResult.res.status===200 && formExistingResult.json.status==='present' && formExistingResult.json.memberName==='Existing Via First Form' && !!formExistingCookie && afterFormExisting.json.members.filter(m=>m.phone==='9876543220').length===1,`status=${formExistingResult.res.status}; result=${formExistingResult.json.status}; matching records=${afterFormExisting.json.members.filter(m=>m.phone==='9876543220').length}`);
+   const formExistingRepeat=await req(`/api/public/join/${token}`,{cookie:formExistingCookie});
+   ok('existing member matched from first form is remembered for next scan',formExistingRepeat.res.status===200 && formExistingRepeat.json.status==='already' && formExistingRepeat.json.recognized===true,`status=${formExistingRepeat.res.status}; result=${formExistingRepeat.json.status}`);
+
+   const directRegistration=await req(`/api/public/join/${token}/register`,{method:'POST',body:{name:'Direct QR New Member',phone:'9876543216',months:3,accept:true}});
+   const directCookie=parseCookie(directRegistration.res,`gs_member_${token}`);
+   ok('new visitor can register directly without lookup endpoint',directRegistration.res.status===200 && directRegistration.json.status==='registered' && directRegistration.json.attendanceMarked===true && !!directCookie,`status=${directRegistration.res.status}; result=${directRegistration.json.status}; marked=${directRegistration.json.attendanceMarked}`);
+   const directRepeat=await req(`/api/public/join/${token}`,{cookie:directCookie});
+   ok('directly registered new member is auto-recognized on next scan',directRepeat.res.status===200 && directRepeat.json.status==='already' && directRepeat.json.memberName==='Direct QR New Member',`status=${directRepeat.res.status}; result=${directRepeat.json.status}`);
+   const directData=await req('/api/data',{cookie:gymCookie});
+   ok('direct QR registration appears once in GymSaathi members and attendance',directData.json.members.filter(m=>m.phone==='9876543216').length===1 && directData.json.attendance.filter(a=>a.phone==='9876543216').length===1,`members=${directData.json.members.filter(m=>m.phone==='9876543216').length}; attendance=${directData.json.attendance.filter(a=>a.phone==='9876543216').length}`);
+
    const switchMember=await req(`/api/public/join/${token}/logout`,{method:'POST',cookie:memberCookie,body:{}});
    ok('switch member revokes cookie/session',switchMember.res.status===200 && switchMember.json.status==='first_visit' && /Max-Age=0/i.test(switchMember.res.headers.get('set-cookie')||''),`status=${switchMember.res.status}`);
    const afterLogout=await req(`/api/public/join/${token}`,{cookie:memberCookie});

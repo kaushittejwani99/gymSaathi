@@ -1,0 +1,123 @@
+{
+  "environment": "isolated file-backed local test server; no live services",
+  "total": 23,
+  "passed": 23,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "Edge test admin login",
+      "pass": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "name": "Each gym receives a unique 48-hex QR token",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "QR page content resolves to the correct gym",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Quarterly-only plan still enables QR registration",
+      "pass": true,
+      "detail": "[{\"months\":3,\"label\":\"3 महीने\",\"fee\":1200}]"
+    },
+    {
+      "name": "Same phone can belong to separate gyms without cross-contamination",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "First-time verify sets HttpOnly + SameSite + gym-scoped cookie",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Gym Alpha device cookie cannot identify member in Gym Beta",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Correct phone with wrong gym-member name cannot bind a session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Invalid mobile number rejected without creating attendance",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Self-registration without consent is rejected",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Self-registration rejects malformed mobile numbers",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Two simultaneous signups with the same gym/mobile create only one member",
+      "pass": true,
+      "detail": "HTTP 200/409"
+    },
+    {
+      "name": "Authenticated dashboard data remains isolated by gym",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Unavailable plan cannot be submitted to registration",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Quarterly-only QR registration saves a 3-month ₹1200 plan and leaves it unpaid",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "New QR registration is reflected in normal gym member data",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Membership is still eligible on its inclusive end date",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Membership starting tomorrow is not marked present today",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Concurrent repeat scans do not create duplicate attendance rows",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Random invalid QR token is not accepted",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Public QR exposes only plan + check-in info, not private member list",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Dashboard attendance UI renders ✓ Present + member name + mobile + check-in time",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "Chat bubble CSS removes forced tall boxes",
+      "pass": true,
+      "detail": ""
+    }
+  ]
+}

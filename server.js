@@ -564,29 +564,41 @@ async function publicJoinApi(req, res, url) {
 
   if (body.website) return json(res, 200, { status: 'registered', message: 'Thanks. Please contact gym staff to confirm your registration.' }), true;
   if (body.accept !== true) fail(400, 'Please confirm that your details are correct.');
-  if (!G.PLANS.some((n) => G.planPrice(account.details, n) > 0)) fail(400, 'New registrations are temporarily unavailable because this gym has no membership plan price configured. Please ask gym staff.');
   const phone = phoneOf(body.phone), name = required(body.name, 'Your full name', 80);
-  const months = Number(body.months);
-  const available = G.PLANS.filter((n) => G.planPrice(account.details, n) > 0);
-  if (!available.includes(months)) fail(400, 'Please choose one of the available membership plans.');
-  const pt = body.pt === true && G.num(account.details.ptPrice) > 0;
-  const diet = body.diet === true && G.num(account.details.dietPrice) > 0;
-  const payload = {
-    name, phone,
-    gender: ['Male', 'Female'].includes(body.gender) ? body.gender : '',
-    age: body.age === '' || body.age == null ? '' : Number(body.age),
-    goal: G.str(body.goal, 100), batch: ['Morning', 'Evening'].includes(body.batch) ? body.batch : '',
-    months, paid: 0, pt, diet,
-  };
-  let result, sessionSecret = '';
+  let result, sessionSecret = '', existingMember = null;
   await write(async () => {
-    // Recheck inside the gym write queue so two near-simultaneous submissions cannot create the same number.
-    if ((await db.find('customers', { gymId: account._id, phone })).some(live)) fail(409, 'This mobile number is already registered. Return to check-in and enter the registered full name.');
+    // First-time QR scans show the registration form. If that number already belongs to a member,
+    // match the supplied full name and check in that record instead of making a duplicate.
+    const existing = (await db.find('customers', { gymId: account._id, phone })).find(live);
+    if (existing) {
+      if (isSample(existing)) fail(409, 'This is a sample member. Please use a real member record or ask gym staff.');
+      if (normPublicName(existing.name) !== normPublicName(name)) {
+        fail(409, 'This mobile number is already registered, but the name did not match. Enter the full name already registered with the gym, or use “Already a member? Verify check-in”.');
+      }
+      existingMember = existing;
+      return;
+    }
+
+    // A new member must have a configured plan. Existing members were matched above and can check in
+    // even when the gym has not configured its current public-registration prices.
+    if (!G.PLANS.some((n) => G.planPrice(account.details, n) > 0)) fail(400, 'New registrations are temporarily unavailable because this gym has no membership plan price configured. Please ask gym staff.');
+    const months = Number(body.months);
+    const available = G.PLANS.filter((n) => G.planPrice(account.details, n) > 0);
+    if (!available.includes(months)) fail(400, 'Please choose one of the available membership plans.');
+    const pt = body.pt === true && G.num(account.details.ptPrice) > 0;
+    const diet = body.diet === true && G.num(account.details.dietPrice) > 0;
+    const payload = {
+      name, phone,
+      gender: ['Male', 'Female'].includes(body.gender) ? body.gender : '',
+      age: body.age === '' || body.age == null ? '' : Number(body.age),
+      goal: G.str(body.goal, 100), batch: ['Morning', 'Evening'].includes(body.batch) ? body.batch : '',
+      months, paid: 0, pt, diet,
+    };
     const who = await details(payload, account);
     const today = indiaToday(), customerId = newId();
     const payNow = await addPeriod(account._id, customerId, who.name, { months, paid: 0, mode: 'Cash' }, account.details, today, { pt, diet });
     await db.insert('customers', { _id: customerId, gymId: account._id, ...who, joinedAt: today });
-    await payNow(); // paid is always zero; the public form cannot claim a payment was made
+    await payNow(); // public QR registration always starts at ₹0 paid
     if (account.sample) await saveGym(account._id, { sample: false });
 
     sessionSecret = crypto.randomBytes(32).toString('hex');
@@ -597,8 +609,8 @@ async function publicJoinApi(req, res, url) {
     const active = await memberActiveToday(account._id, customerId, today);
     if (active) {
       const id = attendanceId(account._id, customerId, today);
-      const existing = await db.find('attendance', { _id: id });
-      if (!existing.length) await db.insert('attendance', { _id: id, gymId: account._id, customerId, date: today, checkedAt: stamp(), source: 'qr-register' });
+      const existingAttendance = await db.find('attendance', { _id: id });
+      if (!existingAttendance.length) await db.insert('attendance', { _id: id, gymId: account._id, customerId, date: today, checkedAt: stamp(), source: 'qr-register' });
     }
     const fee = G.feeFor(account.details, { months, pt, diet });
     result = {
@@ -607,6 +619,11 @@ async function publicJoinApi(req, res, url) {
       fee, due: fee, attendanceMarked: active,
     };
   })({ gymId: account._id });
+
+  if (existingMember) {
+    sessionSecret = await createMemberQrSession(account, existingMember._id);
+    result = { ...(await markMemberAttendance(account, existingMember, 'qr')), recognized: true };
+  }
   noteGymAttendanceChange(account._id);
   return json(res, 200, result, { 'Set-Cookie': memberQrCookieHeader(req, token, sessionSecret) }), true;
 }

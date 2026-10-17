@@ -132,6 +132,14 @@
         pt: !!form.elements.pt?.checked, diet: !!form.elements.diet?.checked,
         accept: true,
       }, 'POST');
+      if (result.status === 'present' || result.status === 'already') {
+        showSuccess(result.status === 'present' ? 'Attendance marked' : 'Already checked in', `${result.memberName ? `Hi ${result.memberName}. ` : ''}${result.message || 'Attendance status confirmed for today.'}`, null);
+        return;
+      }
+      if (result.status === 'inactive') {
+        showSuccess('Membership not active', `${result.memberName ? `Hi ${result.memberName}. ` : ''}${result.message}`, null);
+        return;
+      }
       showSuccess('Registration saved', result.message || 'Please visit the front desk to confirm your membership.', result.fee);
     } catch (error) {
       notice(error.message);
@@ -140,9 +148,13 @@
     }
   });
 
-  $('#backButton').addEventListener('click', () => {
+  $('#existingMemberButton').addEventListener('click', () => {
+    const reg = $('#registerForm'), lookup = $('#lookupForm');
+    lookup.elements.name.value = value(reg, 'name');
+    lookup.elements.phone.value = value(reg, 'phone');
     visible('#lookupPanel');
-    notice('');
+    notice('Already registered members can verify their saved full name and mobile here. Future scans on this browser will be automatic.', true);
+    $('#lookupForm').elements.name.focus();
   });
 
   $('#switchMemberButton').addEventListener('click', async () => {
@@ -177,9 +189,16 @@
       showSuccess('Membership not active', `${result.memberName ? `Hi ${result.memberName}. ` : ''}${result.message}`, null);
       return;
     }
-    $('#lookupPanel').hidden = false;
     $('#switchMemberButton').hidden = true;
-    if (!result.canRegister) notice('Existing members can check in. New registrations ke liye gym desk se baat karein.');
+    if (result.canRegister && plans.length) {
+      $('#registerForm').reset();
+      populatePlans();
+      visible('#registerPanel');
+      notice('Pehli baar hai? Registration complete karein. Agar aap pehle se member hain, apna wahi registered name aur mobile enter karein—duplicate member nahi banega.', true);
+    } else {
+      visible('#lookupPanel');
+      notice('New registration abhi available nahi hai kyunki gym ka plan configured nahi hai. Existing member apna registered name aur mobile daal kar check-in kar sakte hain; naye registration ke liye gym desk se baat karein.');
+    }
   }
   start().catch((error) => {
     panels.forEach((selector) => $(selector).hidden = true);

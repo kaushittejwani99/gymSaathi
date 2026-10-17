@@ -18,7 +18,7 @@
 
     <section id="lookupPanel" class="panel" hidden>
       <h2>Check in or join this gym</h2>
-      <p class="muted">Already a member? On your first visit, verify your registered full name and mobile number once. This device will recognize you on future scans. New here? Complete the short registration form.</p>
+      <p class="muted">Already a member? Enter the same full name and mobile number saved by the gym. New here? Register once. This device will be remembered for future QR scans.</p>
       <form id="lookupForm" novalidate>
         <label>Full name
           <input name="name" autocomplete="name" maxlength="80" required placeholder="As registered with the gym">
@@ -32,14 +32,14 @@
     </section>
 
     <section id="registerPanel" class="panel" hidden>
-      <h2>New member registration</h2>
-      <p class="muted">Fill in your details. Your membership fee will be calculated from this gym's settings. This form never records a payment.</p>
+      <h2>First-time QR registration</h2>
+      <p class="muted">First scan on this device? Fill in the form. If your mobile is already registered, enter the same registered name and we will check in that existing member instead of creating a duplicate. Future scans on this browser will mark attendance automatically. This form does not record a payment.</p>
       <form id="registerForm" novalidate>
         <label>Full name
           <input name="name" autocomplete="name" maxlength="80" required>
         </label>
         <label>Mobile number
-          <input name="phone" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="15" required readonly>
+          <input name="phone" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="15" required placeholder="10-digit mobile number">
         </label>
         <div class="two-col">
           <label>Gender (optional)
@@ -65,8 +65,8 @@
           </label>
         </div>
         <label class="consent"><input type="checkbox" name="accept" required> <span>I confirm these details are mine and are correct.</span></label>
-        <button class="btn primary" type="submit" id="registerButton">Register myself</button>
-        <button class="btn secondary" type="button" id="backButton">Back</button>
+        <button class="btn primary" type="submit" id="registerButton">Register / check in</button>
+        <button class="btn secondary" type="button" id="existingMemberButton">Already a member? Verify check-in</button>
       </form>
     </section>
 
