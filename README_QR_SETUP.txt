@@ -49,3 +49,12 @@ The public actions have server-side rate limits. The current server uses its exi
 clientOf() helper; when deploying behind your trusted Render reverse proxy, configure
 TRUST_PROXY=1 in the Render environment only if that proxy provides the expected
 X-Forwarded-For header, so rate limits can distinguish visitors correctly.
+
+
+REGISTRATION AVAILABILITY FIX
+-----------------------------
+The public QR registration form is enabled when at least one membership plan has
+an effective price greater than zero. If price1 is configured, longer plans may
+use the monthly-price fallback, consistent with PRICE_HINT. If price1 is empty,
+a specifically priced 3/6/12-month plan can still be used. If no plan has a
+price, registration remains blocked until the gym configures one in Settings.

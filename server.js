@@ -509,9 +509,9 @@ function publicGymDetails(account) {
   const gym = account.details || {};
   return {
     gym: { name: G.str(gym.name, 80), timings: G.str(gym.timings, 150), amenities: G.str(gym.amenities, 400) },
-    plans: G.PLANS.filter((months) => months === 1 || G.num(gym[`price${months}`])).map((months) => ({ months, label: G.planLabel(months), fee: G.planPrice(gym, months) })),
+    plans: G.PLANS.filter((months) => G.planPrice(gym, months) > 0).map((months) => ({ months, label: G.planLabel(months), fee: G.planPrice(gym, months) })),
     extras: { pt: G.num(gym.ptPrice), diet: G.num(gym.dietPrice) },
-    canRegister: G.num(gym.price1) > 0,
+    canRegister: G.PLANS.some((months) => G.planPrice(gym, months) > 0),
   };
 }
 
@@ -564,10 +564,10 @@ async function publicJoinApi(req, res, url) {
 
   if (body.website) return json(res, 200, { status: 'registered', message: 'Thanks. Please contact gym staff to confirm your registration.' }), true;
   if (body.accept !== true) fail(400, 'Please confirm that your details are correct.');
-  if (!G.num(account.details.price1)) fail(400, 'New registrations are temporarily unavailable. Please ask gym staff.');
+  if (!G.PLANS.some((n) => G.planPrice(account.details, n) > 0)) fail(400, 'New registrations are temporarily unavailable because this gym has no membership plan price configured. Please ask gym staff.');
   const phone = phoneOf(body.phone), name = required(body.name, 'Your full name', 80);
   const months = Number(body.months);
-  const available = G.PLANS.filter((n) => n === 1 || G.num(account.details[`price${n}`]));
+  const available = G.PLANS.filter((n) => G.planPrice(account.details, n) > 0);
   if (!available.includes(months)) fail(400, 'Please choose one of the available membership plans.');
   const pt = body.pt === true && G.num(account.details.ptPrice) > 0;
   const diet = body.diet === true && G.num(account.details.dietPrice) > 0;
