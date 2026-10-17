@@ -489,8 +489,8 @@ Object.assign(actions, {
 
 const attendancePanel = () => {
   const rows = Array.isArray(S.attendance) ? S.attendance : [];
-  return `<section class="card"><div class="card-head"><h2>Today's attendance (${rows.length})</h2><span class="hint">Check-ins through the member QR code</span></div>
-    ${rows.length ? table(["Member", "Mobile", "Check-in time"], rows.map((a) => `<tr><td><a href="#/members/${esc(a.id)}">${esc(a.name)}</a></td><td>${esc(a.phone)}</td><td>${esc(new Date(a.checkedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }))}</td></tr>`)) : empty("No check-ins yet today", "When a member scans the QR code and checks in, their attendance appears here.")}
+  return `<section class="card"><div class="card-head"><h2>Today's attendance</h2><span class="hint">QR check-ins — names and marked status</span></div>
+    ${rows.length ? table(["Status", "Member", "Mobile", "Check-in time"], rows.map((a) => `<tr><td><span class="attendance-tick" aria-label="Present">✓ Present</span></td><td><a href="#/members/${esc(a.id)}">${esc(a.name)}</a></td><td>${esc(a.phone)}</td><td>${esc(new Date(a.checkedAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }))}</td></tr>`)) : empty("No check-ins yet today", "When a member scans the QR code and checks in, their attendance appears here.")}
   </section>`;
 };
 

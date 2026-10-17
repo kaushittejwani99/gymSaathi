@@ -201,7 +201,7 @@ function memberOf(c, periods, paid) {
 }
 async function memberById(gymId, id) {
   if (sample.isSampleId(id)) {
-    const g = await gymById(gymId), kept = g && g.sample ? sample.records(gymId, G.todayISO()) : null, c = kept && kept.customers.find((x) => x._id === id);
+    const g = await gymById(gymId), kept = g && g.sample ? sample.records(gymId, indiaToday()) : null, c = kept && kept.customers.find((x) => x._id === id);
     if (!c) fail(404, 'Member not found.');
     return memberOf(c, kept.memberships.filter((p) => p.customerId === id), kept.transactions.filter((t) => t.customerId === id));
   }
@@ -214,7 +214,7 @@ async function loadGym(account) {
   // The three reads below are what every page of a gym needs, so their answer is kept until the gym changes something.
   const own = await cache.through(`records:${account._id}`, keepFor,
     () => Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: account._id }))));
-  const shown = account.sample ? sample.records(account._id, G.todayISO()) : { customers: [], memberships: [], transactions: [] };
+  const shown = account.sample ? sample.records(account._id, indiaToday()) : { customers: [], memberships: [], transactions: [] };
   const all = [...shown.customers, ...own[0]], periods = [...shown.memberships, ...own[1]], everyPaid = [...shown.transactions, ...own[2]];
   const customers = all.filter(live), here = new Map(customers.map((c) => [c._id, c.name]));
   const paid = everyPaid.filter((t) => here.has(t.customerId)).sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
@@ -259,7 +259,7 @@ async function snapshot(g, date) {
 // backup for the day. It is safe to run again on the same day.
 // ponytail: reads each gym's kept backups to see their dates; store the dates apart if the backups grow large.
 async function daily(now = new Date()) {
-  const today = G.todayISO(now), cutoff = new Date(now - KEEP_DELETED_DAYS * 864e5).toISOString();
+  const today = indiaToday(now), cutoff = new Date(now - KEEP_DELETED_DAYS * 864e5).toISOString();
   for (const session of await db.find('member_qr_sessions')) {
     if (!Number.isFinite(session.expiresAt) || session.expiresAt <= now.getTime()) await db.remove('member_qr_sessions', { _id: session._id });
   }
@@ -282,7 +282,7 @@ async function markSent(gymId, today, key) {
 
 // Sends today's reminders of every gym on WhatsApp. A gym that is switched off or whose time is over sends nothing.
 // One that fails stays on that gym's dashboard, where it can still be sent by a tap.
-async function runReminders(today = G.todayISO()) {
+async function runReminders(today = indiaToday()) {
   const now = stamp(), count = { sent: 0, failed: 0 };
   for (const account of await db.find('gyms')) {
     if (account.deletedAt || account.disabled || !(account.validTill > now)) continue;
@@ -304,7 +304,7 @@ async function runReminders(today = G.todayISO()) {
 let remindedOn = '', tidiedOn = '';
 function startReminders() {
   const tick = () => {
-    const today = G.todayISO(), hour = new Date().getHours();
+    const today = indiaToday(), hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", hourCycle: "h23" }).format(new Date()));
     if (tidiedOn !== today) { tidiedOn = today; daily().catch((e) => console.error('The daily backup failed:', e)); }
     if (!wa.enabled() || remindedOn === today || hour < SEND_FROM || hour >= SEND_TILL) return;
     remindedOn = today;
@@ -651,7 +651,7 @@ const either = {
     const data = gymAccount && await loadGym(gymAccount);
     const saved = await exportsOf(admin ? 'owner' : gymAccount._id, admin ? (await db.find('gyms', {}, ['deletedAt'])).some(live) : data.members.some((m) => !sample.isSampleId(m.id)));
     if (!gymAccount) return { user, version, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, ...saved, aiEnabled: ai.aiEnabled() };
-    return { user, version, ...data, ...saved, joinToken: gymAccount.joinToken, sent: data.sent[G.todayISO()] || {}, validTill: gymAccount.validTill, paying: gymAccount.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
+    return { user, version, ...data, ...saved, joinToken: gymAccount.joinToken, sent: data.sent[indiaToday()] || {}, validTill: gymAccount.validTill, paying: gymAccount.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
 };
 
@@ -677,7 +677,7 @@ const gymRoutes = {
   // A new member: who they are, the plan they took and what they paid today. Whatever is left unpaid is asked for
   // every day by the reminders.
   'POST /api/members': write(async ({ body, account, gymId }) => {
-    const today = G.todayISO(), who = await details(body, account), id = newId();
+    const today = indiaToday(), who = await details(body, account), id = newId();
     // The period goes in before the member, so a failure in between leaves nothing half-made on the screens.
     const payNow = await addPeriod(gymId, id, who.name, body, account.details, today, extras(body));
     await db.insert('customers', { _id: id, gymId, ...who, joinedAt: body.start && body.start < today ? body.start : today }); // an old member typed in today joined back then
@@ -735,7 +735,7 @@ const gymRoutes = {
   // a mistake; a new purchase is a renewal, which adds a period and leaves this one as it was.
   'PUT /api/members/:id/period': write(async ({ body, account, gymId, id }) => {
     const m = await memberById(gymId, id), [old] = await db.find('memberships', { _id: m.membershipId, gymId }), more = extras(body, m);
-    const { paid, ...plan } = period({ ...body, paid: 0, start: body.start || old.start }, account.details, G.todayISO(), more);
+    const { paid, ...plan } = period({ ...body, paid: 0, start: body.start || old.start }, account.details, indiaToday(), more);
     if (m.fee - m.paid - old.fee + plan.fee < 0) fail(400, 'More has already been paid than this fee. Change or delete a payment first.');
     await db.update('memberships', { _id: old._id, gymId }, { ...plan, ...more });
     return memberById(gymId, id);
@@ -753,7 +753,7 @@ const gymRoutes = {
   }),
   // A new period, added beside the earlier ones. Anything still owed on those stays owed.
   'POST /api/members/:id/renew': write(async ({ body, account, gymId, id }) => {
-    const m = await memberById(gymId, id), today = G.todayISO();
+    const m = await memberById(gymId, id), today = indiaToday();
     // It starts the day after the old one ends, or today when that day has passed.
     // The same renewal sent again (the answer was lost and the button pressed once more, or the yes said twice) is not a
     // second one: a new period never starts on the day the running one started.
@@ -765,12 +765,12 @@ const gymRoutes = {
   'POST /api/members/:id/pay': write(async ({ body, gymId, id }) => {
     const m = await memberById(gymId, id), amt = amount(body.amount, 'The amount');
     if (amt <= 0 || amt > G.due(m)) fail(400, `${m.name} owes ${G.money(G.due(m))}. Enter an amount up to that.`);
-    await pay(gymId, id, m.name, m.membershipId, amt, body.mode, body.date ? dateOf(body.date, 'The date') : G.todayISO());
+    await pay(gymId, id, m.name, m.membershipId, amt, body.mode, body.date ? dateOf(body.date, 'The date') : indiaToday());
     return memberById(gymId, id);
   }),
   // 'They have all paid': everything each of these members still owes is taken, in one go. Whoever owes nothing is passed over.
   'POST /api/members/pay': write(async ({ body, account, gymId }) => {
-    const ids = new Set(tickedIds(body.ids)), today = G.todayISO(), mode = MODES.includes(body.mode) ? body.mode : 'Cash';
+    const ids = new Set(tickedIds(body.ids)), today = indiaToday(), mode = MODES.includes(body.mode) ? body.mode : 'Cash';
     const paid = (await loadGym(account)).members.filter((m) => ids.has(m.id) && !m.sample && G.due(m) > 0)
       .map((m) => ({ _id: newId(), gymId, customerId: m.id, membershipId: m.membershipId, name: m.name, amount: G.due(m), mode, date: today, createdAt: stamp() }));
     if (paid.length) await db.insert('transactions', paid);
@@ -778,7 +778,7 @@ const gymRoutes = {
   }),
   // Noted when the owner opens WhatsApp for a reminder, so the same one is not offered again that day.
   'POST /api/reminders/sent': write(async ({ body, gymId }) => {
-    const today = G.todayISO(), m = await memberById(gymId, G.str(body.memberId, 40));
+    const today = indiaToday(), m = await memberById(gymId, G.str(body.memberId, 40));
     if (!['fees', 'expiring', 'expired', 'welcome'].includes(body.type)) fail(400, 'Unknown reminder.');
     await markSent(gymId, today, `${m.id}:${body.type}`);
   }),
@@ -791,13 +791,13 @@ const gymRoutes = {
   'POST /api/chat': async ({ body, account, gymId }) => {
     const quick = body.quick === true;
     if (!quick && bucket(`ai ${gymId}`, 60e3).n++ >= 40) fail(429, 'That is a lot of questions. Wait a minute and ask again.');
-    return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), quick, history: body.history, confirming: typeof body.confirming === 'string' ? G.str(body.confirming, 12) || true : body.confirming === true, spoken: body.spoken === true });
+    return ai.chat({ question: required(body.question, 'A question', 500), db: await loadGym(account), today: indiaToday(), quick, history: body.history, confirming: typeof body.confirming === 'string' ? G.str(body.confirming, 12) || true : body.confirming === true, spoken: body.spoken === true });
   },
 
   // Old records, step one: the AI reads a photo, a PDF or a spreadsheet into rows. Nothing is saved, and the file is not kept.
   'POST /api/import/read': async ({ body, account, gymId }) => {
     if (bucket(`import ${gymId}`, 10 * 60e3).n++ >= 20) fail(429, 'That is a lot of files at once. Wait ten minutes and go on.');
-    const today = G.todayISO();
+    const today = indiaToday();
     let rows;
     try { rows = await ai.readRecords({ file: { name: body.name, type: G.str(body.type, 100), data: body.data }, today }); } catch (e) {
       if (!e.readable) console.error('Reading old records failed:', e.status || '', e.message);
@@ -809,7 +809,7 @@ const gymRoutes = {
   // Step two: the rows the owner looked through become members. Each has the period it was written with, taken as paid
   // except for what is marked pending. A row that cannot be a member is skipped and named, and the rest still go in.
   'POST /api/import/save': write(async ({ body, account, gymId }) => {
-    const today = G.todayISO(), gym = account.details, taken = new Set((await db.find('customers', { gymId })).filter(live).map((c) => c.phone));
+    const today = indiaToday(), gym = account.details, taken = new Set((await db.find('customers', { gymId })).filter(live).map((c) => c.phone));
     const people = [], periods = [], paid = [], skipped = [];
     for (const [i, r] of (Array.isArray(body.rows) ? body.rows : []).slice(0, 600).entries()) {
       try {
@@ -915,7 +915,7 @@ const adminRoutes = {
     const all = {};
     for (const name of ['gyms', 'customers', 'memberships', 'transactions', 'attendance']) all[name] = await db.find(name);
     const body = zlib.gzipSync(JSON.stringify({ madeAt: stamp(), ...all }));
-    send(res, 200, 'application/gzip', body, { 'Content-Disposition': `attachment; filename="gymsaathi-backup-${G.todayISO()}.json.gz"` });
+    send(res, 200, 'application/gzip', body, { 'Content-Disposition': `attachment; filename="gymsaathi-backup-${indiaToday()}.json.gz"` });
   },
   'PUT /api/admin/gyms/:id': async ({ body, id }) => {
     const g = (await gymById(id)) || fail(404, 'Gym not found.');
