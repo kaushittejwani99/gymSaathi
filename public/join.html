@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Gym member check-in</title>
+  <link rel="stylesheet" href="/join.css">
+</head>
+<body>
+  <main class="join-shell">
+    <header class="join-head">
+      <div class="join-mark" aria-hidden="true">G</div>
+      <div><p class="eyebrow">GYMSAATHI</p><h1 id="gymName">Gym member check-in</h1><p id="gymDetails" class="muted">Loading this gym…</p></div>
+    </header>
+
+    <section id="notice" class="notice" role="status" aria-live="polite" hidden></section>
+
+    <section id="lookupPanel" class="panel" hidden>
+      <h2>Check in or join this gym</h2>
+      <p class="muted">Already a member? On your first visit, verify your registered full name and mobile number once. This device will recognize you on future scans. New here? Complete the short registration form.</p>
+      <form id="lookupForm" novalidate>
+        <label>Full name
+          <input name="name" autocomplete="name" maxlength="80" required placeholder="As registered with the gym">
+        </label>
+        <label>Mobile number
+          <input name="phone" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="15" required placeholder="10-digit mobile number">
+        </label>
+        <button class="btn primary" type="submit" id="lookupButton">Continue</button>
+      </form>
+      <p class="fine-print">This page is only for this gym's check-in and self-registration. It does not provide access to member lists, fees, or gym management.</p>
+    </section>
+
+    <section id="registerPanel" class="panel" hidden>
+      <h2>New member registration</h2>
+      <p class="muted">Fill in your details. Your membership fee will be calculated from this gym's settings. This form never records a payment.</p>
+      <form id="registerForm" novalidate>
+        <label>Full name
+          <input name="name" autocomplete="name" maxlength="80" required>
+        </label>
+        <label>Mobile number
+          <input name="phone" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="15" required readonly>
+        </label>
+        <div class="two-col">
+          <label>Gender (optional)
+            <select name="gender"><option value="">Prefer not to say</option><option value="Male">Male</option><option value="Female">Female</option></select>
+          </label>
+          <label>Age (optional)
+            <input name="age" type="number" min="5" max="100" step="1" inputmode="numeric" placeholder="Age">
+          </label>
+        </div>
+        <label>Membership plan
+          <select name="months" id="planSelect" required></select>
+        </label>
+        <div id="extras" class="extras" hidden>
+          <label id="ptWrap" class="check" hidden><input type="checkbox" name="pt"> <span id="ptLabel">Personal trainer</span></label>
+          <label id="dietWrap" class="check" hidden><input type="checkbox" name="diet"> <span id="dietLabel">Diet plan</span></label>
+        </div>
+        <div class="two-col">
+          <label>Preferred batch (optional)
+            <select name="batch"><option value="">No preference</option><option value="Morning">Morning</option><option value="Evening">Evening</option></select>
+          </label>
+          <label>Fitness goal (optional)
+            <select name="goal"><option value="">Select a goal</option><option value="Fitness">Fitness</option><option value="Weight loss">Weight loss</option><option value="Muscle gain">Muscle gain</option></select>
+          </label>
+        </div>
+        <label class="consent"><input type="checkbox" name="accept" required> <span>I confirm these details are mine and are correct.</span></label>
+        <button class="btn primary" type="submit" id="registerButton">Register myself</button>
+        <button class="btn secondary" type="button" id="backButton">Back</button>
+      </form>
+    </section>
+
+    <section id="successPanel" class="panel success-panel" hidden>
+      <div class="success-mark" aria-hidden="true">✓</div>
+      <h2 id="successTitle">Done</h2>
+      <p id="successMessage"></p>
+      <div id="feeLine" class="fee-line" hidden></div>
+      <p class="fine-print">You can close this page now. If anything looks wrong, please speak to the gym desk.</p>
+      <button class="btn secondary" id="switchMemberButton" type="button" hidden>This is not me? Switch member</button>
+    </section>
+    <footer>GymSaathi · Private member check-in</footer>
+  </main>
+  <script src="/join.js" defer></script>
+</body>
+</html>

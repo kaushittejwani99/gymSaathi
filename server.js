@@ -26,7 +26,7 @@ const CACHE_SECONDS = 300;           // how long a gym's records are kept in the
 const SEND_FROM = 6, SEND_TILL = 21; // reminders go out by themselves from 6 in the morning, and never at night
 const TRIAL_MONTHS = 1, PRICE = 999; // a gym's first month from its first sign-in is free; after that it pays PRICE a month
 const OWNER_DAYS = 30;               // how long the owner of the service stays signed in
-const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'";
+const CSP = "default-src 'self'; img-src 'self' data: https://api.qrserver.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Other'];
 
@@ -34,6 +34,12 @@ const MODES = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Other'];
 const fail = (status, message) => { throw Object.assign(new Error(message), { httpStatus: status }); };
 const newId = () => crypto.randomBytes(8).toString('hex');
 const stamp = () => new Date().toISOString();
+const indiaToday = (at = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(at);
+  const v = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${v.year}-${v.month}-${v.day}`;
+};
+const newJoinToken = () => crypto.randomBytes(24).toString('hex'); // 192 bits; public, gym-specific QR capability
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 // A mark of the app as the browser gets it, made from its own files. It is written into the page and told with every
 // version check: a page that was left open while the server was updated sees the mark change and loads itself afresh,
@@ -94,7 +100,7 @@ async function gymById(id) {
 // `details` is the gym as its Settings page holds it: name, owner, mobile, address, timings, amenities, UPI and prices.
 async function createGym(email, password, details) {
   if (email === adminEmail() || (await db.find('gyms', { email })).length) return null;
-  const g = { _id: newId(), email, ...hashed(password), createdAt: stamp(), disabled: false, firstLoginAt: null, lastLoginAt: null, validTill: null, renewals: [], sent: {}, details };
+  const g = { _id: newId(), email, ...hashed(password), createdAt: stamp(), joinToken: newJoinToken(), disabled: false, firstLoginAt: null, lastLoginAt: null, validTill: null, renewals: [], sent: {}, details };
   await db.insert('gyms', g);
   return g;
 }
@@ -132,7 +138,7 @@ function send(res, status, type, body, headers) {
   res.writeHead(status, { 'Content-Type': type, 'Content-Length': Buffer.byteLength(body), 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', ...headers });
   res.end(body);
 }
-const json = (res, status, data) => send(res, status, 'application/json; charset=utf-8', JSON.stringify(data));
+const json = (res, status, data, headers) => send(res, status, 'application/json; charset=utf-8', JSON.stringify(data), headers);
 const cookieOf = (req) => (/(?:^|;\s*)sid=([a-f0-9]{64})/.exec(req.headers.cookie || '') || [])[1];
 // The cookie outlives every session: how long a sign-in lasts is decided here on the server.
 const setCookie = (res, token) => res.setHeader('Set-Cookie',
@@ -212,7 +218,13 @@ async function loadGym(account) {
   const all = [...shown.customers, ...own[0]], periods = [...shown.memberships, ...own[1]], everyPaid = [...shown.transactions, ...own[2]];
   const customers = all.filter(live), here = new Map(customers.map((c) => [c._id, c.name]));
   const paid = everyPaid.filter((t) => here.has(t.customerId)).sort((a, b) => (a.createdAt > b.createdAt) - (a.createdAt < b.createdAt));
-  return { gym: account.details, sent: account.sent, deleted: all.filter((c) => c.deletedAt).map((c) => ({ id: c._id, name: c.name, phone: c.phone, deletedAt: c.deletedAt })),
+  const attendanceDate = indiaToday();
+  const attendanceRows = await db.find('attendance', { gymId: account._id, date: attendanceDate });
+  const attendance = attendanceRows.map((a) => {
+    const member = customers.find((c) => c._id === a.customerId);
+    return member ? { id: member._id, name: member.name, phone: member.phone, date: a.date, checkedAt: a.checkedAt, source: a.source || 'qr' } : null;
+  }).filter(Boolean).sort((a, b) => a.checkedAt.localeCompare(b.checkedAt));
+  return { gym: account.details, sent: account.sent, attendanceDate, attendance, deleted: all.filter((c) => c.deletedAt).map((c) => ({ id: c._id, name: c.name, phone: c.phone, deletedAt: c.deletedAt })),
     members: customers.map((c) => memberOf(c, periods.filter((p) => p.customerId === c._id), paid.filter((t) => t.customerId === c._id))),
     // A payment carries the name its member has now: one renamed since is not listed under the old name.
     payments: paid.map((t) => ({ id: t._id, memberId: t.customerId, name: here.get(t.customerId) || t.name, amount: t.amount, date: t.date, mode: t.mode })) };
@@ -224,10 +236,11 @@ async function purgeMember(gymId, id) {
   await db.remove('customers', { _id: id, gymId });
   await db.remove('memberships', { gymId, customerId: id });
   await db.remove('transactions', { gymId, customerId: id });
+  await db.remove('member_qr_sessions', { gymId, customerId: id });
   await cache.drop(`records:${gymId}`);
 }
 async function purgeGym(id) {
-  for (const name of ['sessions', 'backups', 'exports', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
+  for (const name of ['sessions', 'member_qr_sessions', 'backups', 'exports', 'transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
   await db.remove('gyms', { _id: id });
   forget(id);
   await cache.drop(`records:${id}`, `exports:${id}`);
@@ -238,15 +251,18 @@ async function purgeGym(id) {
 const packed = (data) => zlib.gzipSync(JSON.stringify(data)).toString('base64');
 const unpacked = (text) => JSON.parse(zlib.gunzipSync(Buffer.from(text, 'base64'), { maxOutputLength: 200e6 }));
 async function snapshot(g, date) {
-  const [customers, memberships, transactions] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId: g._id })));
+  const [customers, memberships, transactions, attendance] = await Promise.all(['customers', 'memberships', 'transactions', 'attendance'].map((name) => db.find(name, { gymId: g._id })));
   await db.remove('backups', { _id: `${g._id}:${date}` });
-  await db.insert('backups', { _id: `${g._id}:${date}`, gymId: g._id, date, at: stamp(), members: customers.filter(live).length, data: packed({ details: g.details, customers, memberships, transactions }) });
+  await db.insert('backups', { _id: `${g._id}:${date}`, gymId: g._id, date, at: stamp(), members: customers.filter(live).length, data: packed({ details: g.details, customers, memberships, transactions, attendance }) });
 }
 // The day's housekeeping: what was deleted more than KEEP_DELETED_DAYS ago goes for good, and every gym gets its
 // backup for the day. It is safe to run again on the same day.
 // ponytail: reads each gym's kept backups to see their dates; store the dates apart if the backups grow large.
 async function daily(now = new Date()) {
   const today = G.todayISO(now), cutoff = new Date(now - KEEP_DELETED_DAYS * 864e5).toISOString();
+  for (const session of await db.find('member_qr_sessions')) {
+    if (!Number.isFinite(session.expiresAt) || session.expiresAt <= now.getTime()) await db.remove('member_qr_sessions', { _id: session._id });
+  }
   for (const g of await db.find('gyms')) {
     if (g.deletedAt) { if (g.deletedAt < cutoff) await purgeGym(g._id); continue; }
     for (const c of await db.find('customers', { gymId: g._id })) if (c.deletedAt && c.deletedAt < cutoff) await purgeMember(g._id, c._id);
@@ -412,6 +428,189 @@ const versionOf = (gymId) => (changes.get(gymId || 'all') || 0) + elsewhere;
 const wrote = new Map(); // gym id, and 'all' -> when this server last changed something there
 const mark = (gymId) => { for (const k of ['all', gymId]) if (k) wrote.set(k, Date.now()); };
 
+async function publicGymForToken(token) {
+  if (!/^[a-f0-9]{48}$/.test(token || '')) return null;
+  const gyms = await db.find('gyms', { joinToken: token });
+  return gyms.find((g) => live(g) && !g.disabled) || null;
+}
+const normPublicName = (value) => G.str(value, 80).toLowerCase().replace(/\s+/g, ' ').trim();
+const attendanceId = (gymId, customerId, date) => `${gymId}:${customerId}:${date}`;
+const MEMBER_QR_SESSION_DAYS = 365;
+const memberQrCookieName = (joinToken) => `gs_member_${joinToken}`;
+const memberQrCookieOf = (req, joinToken) => {
+  const name = memberQrCookieName(joinToken);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (new RegExp(`(?:^|;\\s*)${escaped}=([a-f0-9]{64})(?:;|$)`)).exec(req.headers.cookie || '')?.[1] || '';
+};
+const memberQrCookieHeader = (req, joinToken, secret) => {
+  const secure = process.env.COOKIE_SECURE === '1' || req.socket.encrypted || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+  return `${memberQrCookieName(joinToken)}=${secret || ''}; HttpOnly; SameSite=Lax; Path=/api/public/join/${joinToken}; Max-Age=${secret ? MEMBER_QR_SESSION_DAYS * 86400 : 0}${secure ? '; Secure' : ''}`;
+};
+
+async function createMemberQrSession(account, customerId) {
+  const secret = crypto.randomBytes(32).toString('hex');
+  await db.insert('member_qr_sessions', {
+    _id: sha256(secret), gymId: account._id, customerId,
+    createdAt: stamp(), expiresAt: Date.now() + MEMBER_QR_SESSION_DAYS * 864e5,
+  });
+  return secret;
+}
+
+async function memberQrSession(req, account, joinToken) {
+  const secret = memberQrCookieOf(req, joinToken);
+  if (!secret) return { member: null, invalidCookie: false };
+  const id = sha256(secret);
+  const [session] = await db.find('member_qr_sessions', { _id: id, gymId: account._id });
+  if (!session || !Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()) {
+    if (session) await db.remove('member_qr_sessions', { _id: id });
+    return { member: null, invalidCookie: true };
+  }
+  const [member] = await db.find('customers', { _id: session.customerId, gymId: account._id });
+  if (!member || !live(member) || isSample(member)) {
+    await db.remove('member_qr_sessions', { _id: id, gymId: account._id });
+    return { member: null, invalidCookie: true };
+  }
+  return { member, session, secret };
+}
+
+async function memberActiveToday(gymId, customerId, today = indiaToday()) {
+  const periods = await db.find('memberships', { gymId, customerId });
+  return periods.some((period) => !period.deletedAt && period.start <= today && period.end >= today);
+}
+
+function noteGymAttendanceChange(gymId) {
+  mark(gymId);
+  for (const key of ['all', gymId]) if (key) changes.set(key, (changes.get(key) || 0) + 1);
+}
+
+async function markMemberAttendance(account, member, source = 'qr') {
+  const date = indiaToday(), id = attendanceId(account._id, member._id, date);
+  if (!(await memberActiveToday(account._id, member._id, date))) {
+    return { status: 'inactive', active: false, memberName: member.name, message: 'Your membership is not active today. Attendance was not marked. Please contact the gym desk to renew or activate your membership.' };
+  }
+  let created = false;
+  await write(async () => {
+    const existing = await db.find('attendance', { _id: id });
+    if (!existing.length) {
+      await db.insert('attendance', { _id: id, gymId: account._id, customerId: member._id, date, checkedAt: stamp(), source });
+      created = true;
+    }
+  })({ gymId: account._id });
+  if (created) noteGymAttendanceChange(account._id);
+  return {
+    status: created ? 'present' : 'already',
+    active: true,
+    memberName: member.name,
+    message: created ? 'Attendance marked for today.' : 'Your attendance is already marked for today.',
+  };
+}
+
+function publicGymDetails(account) {
+  const gym = account.details || {};
+  return {
+    gym: { name: G.str(gym.name, 80), timings: G.str(gym.timings, 150), amenities: G.str(gym.amenities, 400) },
+    plans: G.PLANS.filter((months) => months === 1 || G.num(gym[`price${months}`])).map((months) => ({ months, label: G.planLabel(months), fee: G.planPrice(gym, months) })),
+    extras: { pt: G.num(gym.ptPrice), diet: G.num(gym.dietPrice) },
+    canRegister: G.num(gym.price1) > 0,
+  };
+}
+
+async function publicJoinApi(req, res, url) {
+  const match = /^\/api\/public\/join\/([a-f0-9]{48})(?:\/(lookup|register|logout))?$/.exec(url.pathname);
+  if (!match) return false;
+  const token = match[1], action = match[2] || '';
+  const account = await publicGymForToken(token);
+  if (!account) fail(404, 'This gym QR link is invalid or no longer available.');
+
+  if (req.method === 'GET' && !action) {
+    const pub = publicGymDetails(account);
+    const { member, invalidCookie } = await memberQrSession(req, account, token);
+    const headers = invalidCookie ? { 'Set-Cookie': memberQrCookieHeader(req, token, '') } : undefined;
+    if (member) {
+      const checkin = await markMemberAttendance(account, member, 'qr');
+      return json(res, 200, { ...pub, ...checkin, recognized: true }), true;
+    }
+    return json(res, 200, { ...pub, status: 'first_visit', recognized: false }, headers), true;
+  }
+  if (req.method !== 'POST' || !['lookup', 'register', 'logout'].includes(action)) fail(405, 'This action is not available.');
+  if (!/^application\/json\b/i.test(req.headers['content-type'] || '')) fail(415, 'Send the request as application/json.');
+
+  // The only public writes are identity verification, self-registration and clearing this device's own QR session.
+  const client = clientOf(req);
+  const limit = bucket(`public qr ${action} ${token} ${client}`, action === 'register' ? 15 * 60e3 : 60e3);
+  if (limit.n++ >= (action === 'register' ? 8 : 120)) fail(429, 'Too many attempts. Please wait a little and try again.');
+  const body = await readJsonBody(req);
+
+  if (action === 'logout') {
+    const secret = memberQrCookieOf(req, token);
+    if (secret) await db.remove('member_qr_sessions', { _id: sha256(secret), gymId: account._id });
+    return json(res, 200, { status: 'first_visit', message: 'This device is ready for another member.' }, { 'Set-Cookie': memberQrCookieHeader(req, token, '') }), true;
+  }
+
+  if (action === 'lookup') {
+    const phone = phoneOf(body.phone), name = required(body.name, 'Your full name', 80);
+    const member = (await db.find('customers', { gymId: account._id, phone })).find((customer) => live(customer));
+    if (!member) return json(res, 200, { status: 'new' }), true;
+    if (isSample(member)) return json(res, 200, { status: 'mismatch', message: 'Sample/demo members cannot check in. Please use your real member details or ask gym staff.' }), true;
+    if (normPublicName(member.name) !== normPublicName(name))
+      return json(res, 200, { status: 'mismatch', message: 'Name and mobile number did not match. Please check them or ask gym staff.' }), true;
+
+    // The member proves which existing record is theirs once per browser/device. The cookie holds only a random secret;
+    // the server keeps its hash linked to gymId + customerId in the database.
+    const secret = await createMemberQrSession(account, member._id);
+    const checkin = await markMemberAttendance(account, member, 'qr');
+    return json(res, 200, { ...checkin, recognized: true }, { 'Set-Cookie': memberQrCookieHeader(req, token, secret) }), true;
+  }
+
+  if (body.website) return json(res, 200, { status: 'registered', message: 'Thanks. Please contact gym staff to confirm your registration.' }), true;
+  if (body.accept !== true) fail(400, 'Please confirm that your details are correct.');
+  if (!G.num(account.details.price1)) fail(400, 'New registrations are temporarily unavailable. Please ask gym staff.');
+  const phone = phoneOf(body.phone), name = required(body.name, 'Your full name', 80);
+  const months = Number(body.months);
+  const available = G.PLANS.filter((n) => n === 1 || G.num(account.details[`price${n}`]));
+  if (!available.includes(months)) fail(400, 'Please choose one of the available membership plans.');
+  const pt = body.pt === true && G.num(account.details.ptPrice) > 0;
+  const diet = body.diet === true && G.num(account.details.dietPrice) > 0;
+  const payload = {
+    name, phone,
+    gender: ['Male', 'Female'].includes(body.gender) ? body.gender : '',
+    age: body.age === '' || body.age == null ? '' : Number(body.age),
+    goal: G.str(body.goal, 100), batch: ['Morning', 'Evening'].includes(body.batch) ? body.batch : '',
+    months, paid: 0, pt, diet,
+  };
+  let result, sessionSecret = '';
+  await write(async () => {
+    // Recheck inside the gym write queue so two near-simultaneous submissions cannot create the same number.
+    if ((await db.find('customers', { gymId: account._id, phone })).some(live)) fail(409, 'This mobile number is already registered. Return to check-in and enter the registered full name.');
+    const who = await details(payload, account);
+    const today = indiaToday(), customerId = newId();
+    const payNow = await addPeriod(account._id, customerId, who.name, { months, paid: 0, mode: 'Cash' }, account.details, today, { pt, diet });
+    await db.insert('customers', { _id: customerId, gymId: account._id, ...who, joinedAt: today });
+    await payNow(); // paid is always zero; the public form cannot claim a payment was made
+    if (account.sample) await saveGym(account._id, { sample: false });
+
+    sessionSecret = crypto.randomBytes(32).toString('hex');
+    await db.insert('member_qr_sessions', {
+      _id: sha256(sessionSecret), gymId: account._id, customerId,
+      createdAt: stamp(), expiresAt: Date.now() + MEMBER_QR_SESSION_DAYS * 864e5,
+    });
+    const active = await memberActiveToday(account._id, customerId, today);
+    if (active) {
+      const id = attendanceId(account._id, customerId, today);
+      const existing = await db.find('attendance', { _id: id });
+      if (!existing.length) await db.insert('attendance', { _id: id, gymId: account._id, customerId, date: today, checkedAt: stamp(), source: 'qr-register' });
+    }
+    const fee = G.feeFor(account.details, { months, pt, diet });
+    result = {
+      status: 'registered', active, memberName: name,
+      message: active ? 'Registration saved. Today\'s first check-in is recorded. Please visit the front desk to confirm payment.' : 'Registration saved, but this membership is not active today. Please contact the gym desk.',
+      fee, due: fee, attendanceMarked: active,
+    };
+  })({ gymId: account._id });
+  noteGymAttendanceChange(account._id);
+  return json(res, 200, result, { 'Set-Cookie': memberQrCookieHeader(req, token, sessionSecret) }), true;
+}
+
 // What is changed in the database by other hands (in Atlas itself, by a script, by restore.js) is followed too: what
 // was kept of that gym is forgotten at once and its open pages are told to read again. A change this server made
 // itself has done all that already, and is known by having happened within the last few seconds.
@@ -441,21 +640,26 @@ const either = {
     return exportsOf(saver(c), true);
   },
   'GET /api/data': async ({ admin, account, gymId }) => {
+    let gymAccount = account;
+    if (gymAccount && !/^[a-f0-9]{48}$/.test(gymAccount.joinToken || '')) {
+      await saveGym(gymAccount._id, { joinToken: newJoinToken() });
+      gymAccount = (await db.find('gyms', { _id: gymAccount._id }))[0] || { ...gymAccount };
+    }
     const version = versionOf(gymId); // read before the records, so a change during the read is asked about again
     const user = { id: account ? account._id : 'owner', email: account ? account.email : adminEmail(), admin };
     // A backup is asked for only where there is something to keep: a gym for the owner, a member for a gym.
-    const data = account && await loadGym(account);
-    const saved = await exportsOf(admin ? 'owner' : account._id, admin ? (await db.find('gyms', {}, ['deletedAt'])).some(live) : data.members.some((m) => !sample.isSampleId(m.id)));
-    if (!account) return { user, version, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, ...saved, aiEnabled: ai.aiEnabled() };
-    return { user, version, ...data, ...saved, sent: data.sent[G.todayISO()] || {}, validTill: account.validTill, paying: account.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
+    const data = gymAccount && await loadGym(gymAccount);
+    const saved = await exportsOf(admin ? 'owner' : gymAccount._id, admin ? (await db.find('gyms', {}, ['deletedAt'])).some(live) : data.members.some((m) => !sample.isSampleId(m.id)));
+    if (!gymAccount) return { user, version, gym: null, members: [], payments: [], deleted: [], sent: {}, price: PRICE, backupDays: BACKUP_DAYS, ...saved, aiEnabled: ai.aiEnabled() };
+    return { user, version, ...data, ...saved, joinToken: gymAccount.joinToken, sent: data.sent[G.todayISO()] || {}, validTill: gymAccount.validTill, paying: gymAccount.renewals.length > 0, price: PRICE, backupDays: BACKUP_DAYS, payNote: payNote(), autoWhatsApp: wa.enabled(), aiEnabled: ai.aiEnabled() };
   },
 };
 
 const gymRoutes = {
   // Everything of this gym as it is kept, for a file on the gym's own computer.
   'GET /api/backup': async ({ account, gymId }) => {
-    const [customers, memberships, transactions] = await Promise.all(['customers', 'memberships', 'transactions'].map((name) => db.find(name, { gymId })));
-    return { madeAt: stamp(), gym: account.details, customers, memberships, transactions };
+    const [customers, memberships, transactions, attendance] = await Promise.all(['customers', 'memberships', 'transactions', 'attendance'].map((name) => db.find(name, { gymId })));
+    return { madeAt: stamp(), gym: account.details, customers, memberships, transactions, attendance };
   },
   'POST /api/auth/password': async ({ body, account, gymId, req }) => {
     if (typeof body.current !== 'string' || !same(hashed(body.current, account.salt).hash, account.hash)) fail(400, 'The current password is not right.');
@@ -693,13 +897,13 @@ const adminRoutes = {
     const [b] = await db.find('backups', { _id: `${id}:${G.str(body.date, 20)}` });
     if (!b) fail(404, 'There is no backup of that day.');
     return write(async () => {
-      const then = unpacked(b.data), LISTS = ['customers', 'memberships', 'transactions'], put = LISTS.map((name) => then[name].filter((d) => d.gymId === id));
+      const then = unpacked(b.data), LISTS = ['customers', 'memberships', 'transactions', 'attendance'], put = LISTS.map((name) => (then[name] || []).filter((d) => d.gymId === id));
       // What the gym held before the first of several restores in a row is the copy worth keeping: a second restore
       // made before anything else changed must not write the first restore's result over it.
       const [last] = await db.find('backups', { _id: `${id}:before restore` }, ['into']);
       const untouched = last && last.into === sha256(JSON.stringify(await Promise.all(LISTS.map((name) => db.find(name, { gymId: id })))));
       if (b.date !== 'before restore' && !untouched) await snapshot(g, 'before restore');
-      for (const name of ['transactions', 'memberships', 'customers']) await db.remove(name, { gymId: id });
+      for (const name of ['transactions', 'memberships', 'customers', 'attendance']) await db.remove(name, { gymId: id });
       for (const [i, name] of LISTS.entries()) await db.insert(name, put[i]);
       await db.update('backups', { _id: `${id}:before restore` }, { into: sha256(JSON.stringify(put)) });
       forget(id); // the gym's name, owner, UPI and prices are not put back: they are as the gym has them now
@@ -709,7 +913,7 @@ const adminRoutes = {
   // Everything, in one compressed file, to keep somewhere other than the database. restore.js puts it back.
   'GET /api/admin/backup': async ({ res }) => {
     const all = {};
-    for (const name of ['gyms', 'customers', 'memberships', 'transactions']) all[name] = await db.find(name);
+    for (const name of ['gyms', 'customers', 'memberships', 'transactions', 'attendance']) all[name] = await db.find(name);
     const body = zlib.gzipSync(JSON.stringify({ madeAt: stamp(), ...all }));
     send(res, 200, 'application/gzip', body, { 'Content-Disposition': `attachment; filename="gymsaathi-backup-${G.todayISO()}.json.gz"` });
   },
@@ -733,6 +937,7 @@ const adminRoutes = {
 };
 
 async function api(req, res, url) {
+  if (await publicJoinApi(req, res, url)) return;
   let id;
   const key = `${req.method} ${url.pathname.replace(/\/[a-f0-9]{16}(?=\/|$)/, (m) => { id = m.slice(1); return '/:id'; })}`;
   const route = open[key] || either[key] || gymRoutes[key] || adminRoutes[key];
@@ -782,9 +987,16 @@ async function start(port) {
   follow();
   if (!adminEmail() || (process.env.ADMIN_PASSWORD || '').length < 8) console.log('Set ADMIN_EMAIL and ADMIN_PASSWORD (8 characters or more): without them nobody can create gym logins.');
   const server = http.createServer((req, res) => {
-    Promise.resolve().then(() => {
+    Promise.resolve().then(async () => {
       const url = new URL(req.url.split('#')[0], 'http://localhost');
       if (url.pathname === '/ping') return send(res, 200, 'text/plain; charset=utf-8', 'ok'); // for an uptime pinger: keeps a free host awake
+      const joinPage = /^\/join\/([a-f0-9]{48})$/.exec(url.pathname);
+      if (joinPage) {
+        if (!['GET', 'HEAD'].includes(req.method)) return send(res, 405, 'text/plain; charset=utf-8', 'Method not allowed');
+        if (!(await publicGymForToken(joinPage[1]))) return send(res, 404, 'text/plain; charset=utf-8', 'This gym QR link is invalid or no longer available.');
+        const html = fs.readFileSync(path.join(PUBLIC, 'join.html'));
+        return send(res, 200, 'text/html; charset=utf-8', html, { 'Content-Security-Policy': CSP, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
+      }
       return url.pathname.startsWith('/api/') ? api(req, res, url) : serveStatic(req, res, url.pathname);
     }).catch((e) => {
       const status = e && e.httpStatus;

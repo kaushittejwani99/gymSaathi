@@ -487,6 +487,13 @@ Object.assign(actions, {
 
 // ---- dashboard
 
+const attendancePanel = () => {
+  const rows = Array.isArray(S.attendance) ? S.attendance : [];
+  return `<section class="card"><div class="card-head"><h2>Today's attendance (${rows.length})</h2><span class="hint">Check-ins through the member QR code</span></div>
+    ${rows.length ? table(["Member", "Mobile", "Check-in time"], rows.map((a) => `<tr><td><a href="#/members/${esc(a.id)}">${esc(a.name)}</a></td><td>${esc(a.phone)}</td><td>${esc(new Date(a.checkedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }))}</td></tr>`)) : empty("No check-ins yet today", "When a member scans the QR code and checks in, their attendance appears here.")}
+  </section>`;
+};
+
 views.dashboard = () => {
   const t = today(),
     ms = S.members,
@@ -502,7 +509,7 @@ views.dashboard = () => {
           ? "Add your first member: the assistant asks the questions and you answer aloud."
           : "First set your prices in Settings. The assistant quotes them to every new member.",
         `<a class="btn secondary" href="#/settings">Gym details and prices</a>${newBtn}<button class="btn secondary" data-action="seed">Load sample members</button>`,
-      )}</div>`,
+      )}</div>${attendancePanel()}`,
     );
   }
   const owed = ms.reduce((s, m) => s + G.due(m), 0),
@@ -549,7 +556,7 @@ views.dashboard = () => {
               "Fees pending and memberships about to end show up here every day.",
             )
       }
-    </section>`,
+    </section>${attendancePanel()}`,
   );
 };
 
@@ -2157,6 +2164,24 @@ const gymPrices = (g, must = "") =>
     .join("");
 const PRICE_HINT =
   "Leave 3, 6 or 12 months empty to charge the monthly price times the months.";
+const publicJoinUrl = () => S && S.joinToken ? `${window.location.origin}/join/${S.joinToken}` : "";
+const qrImageUrl = () => {
+  const url = publicJoinUrl();
+  return url ? `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=12&data=${encodeURIComponent(url)}` : "";
+};
+const memberQrCard = () => {
+  const url = publicJoinUrl();
+  if (!url) return "";
+  const image = qrImageUrl();
+  return `<section class="card"><div class="card-head"><h2>Member QR code</h2><span class="hint">Place this code at your gym entrance.</span></div>
+    <div class="card-body qr-layout"><img class="member-qr" src="${esc(image)}" alt="QR code for this gym's member check-in and registration" referrerpolicy="no-referrer" loading="lazy">
+      <div class="qr-explain"><p><strong>One QR code for both actions</strong></p><p class="muted">On the first visit, existing members verify their name and mobile once; new visitors register themselves. After that, this browser/device is remembered by a secure cookie and future QR scans check membership status and mark attendance automatically. Clearing browser cookies or using another device requires verification again. The public page cannot open your dashboard or member list.</p>
+        <label class="field">Public QR link<input readonly value="${esc(url)}" id="memberQrUrl"></label>
+        <div class="actions"><button type="button" class="btn secondary" data-action="qr-copy">Copy QR link</button><a class="btn primary" href="${esc(image)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open / print QR image</a></div>
+        <p class="hint">Print the QR image and put it near the entrance. Payment is not recorded by public self-registration; staff can collect it in GymSaathi.</p>
+      </div>
+    </div></section>`;
+};
   const staffRowHtml = (s = {}) => `<div class="grid three staff-row" style="margin-bottom: 8px; align-items: end;">
   ${field("Staff name", input("staffName", s.name || "", 'maxlength="80" placeholder="e.g. Rohit Sharma"'))}
   ${field("Mobile number", input("staffPhone", s.phone || "", 'type="tel" inputmode="numeric" maxlength="15" placeholder="10-digit mobile"'))}
@@ -2203,6 +2228,7 @@ const readFormWithStaff = (form) => {
         <div class="card-body grid three">${gymPrices(g)}</div></section>
       <div class="form-foot"><button class="btn primary">Save settings</button></div>
     </form>
+    ${memberQrCard()}
     ${view ? "" : backupCard()}
     ${
       view
@@ -2220,6 +2246,18 @@ const passwordField = (label, name, auto) =>
   );
 
 Object.assign(actions, {
+  async "qr-copy"() {
+    const url = publicJoinUrl();
+    if (!url) return toast("QR link is not ready. Reload Settings.", true);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("QR link copied");
+    } catch {
+      const input = $("#memberQrUrl");
+      if (input) { input.focus(); input.select(); }
+      toast("Select the link and copy it manually.", true);
+    }
+  },
   "staff-add"(el) {
     const list = el.closest("div").previousElementSibling;
     if (list) list.insertAdjacentHTML("beforeend", staffRowHtml({}));

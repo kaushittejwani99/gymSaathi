@@ -279,3 +279,12 @@ body.loading #loading { display: block; animation: slide 1.1s linear infinite; }
 .page-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
 .page-title h1 { margin: 0; }
 .back { padding: 0 12px 0 8px; }
+
+
+/* Public member QR card in authenticated Settings */
+.qr-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; align-items: center; }
+.member-qr { display: block; width: 220px; height: 220px; max-width: 100%; object-fit: contain; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; }
+.qr-explain { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.qr-explain p { margin: 0; }
+.qr-explain .actions { margin-top: 4px; }
+@media (max-width: 600px) { .qr-layout { grid-template-columns: 1fr; } .member-qr { margin-inline: auto; } }

@@ -1,0 +1,13 @@
+GymSaathi QR remembered-device check-in - isolated integration test report
+
+Automated checks run against the patched server with temporary file-backed test data:
+- JavaScript syntax: server.js, lib/db.js, public/app.js and public/join.js passed node --check.
+- First scan without device cookie returns first_visit.
+- Existing active member verifies name + mobile once; server issues a gym-scoped HttpOnly cookie; attendance is written.
+- Reopening the same QR URL with that cookie recognizes the member automatically without name/mobile and does not duplicate same-day attendance.
+- Existing member with an expired membership receives inactive status; attendance is not written.
+- New member registration creates customer + membership + member_qr_sessions row, issues the device cookie and records the first check-in if the membership is active today.
+- Switch-member/logout revokes the saved session and clears the cookie.
+- Unauthenticated access to /api/data remains denied (401).
+
+Scope note: these are local isolated tests with fixtures, not a live Render deployment test. Production database/environment and real browser scanning should still be checked after deployment.

@@ -1,0 +1,9 @@
+GymSaathi QR + Assistant + Backup — isolated end-to-end review
+
+Latest supplied frontend/library files were reviewed with the QR-enabled server from the previous patch. Two bugs found in review were fixed in this package:
+1. Assistant intent guard treated the words “add” and “karna” as help/question language, so “naya member add karo” did not open registration. The guard now only matches actual help/how-to/import phrasing.
+2. Backup restore removed members, memberships and transactions but did not clear old attendance before inserting the snapshot. Restore now replaces attendance too, avoiding duplicated/stale check-ins.
+
+Test run: 38/38 isolated integration checks passed after fixes. Coverage included server start, login, settings/staff persistence, QR public page, first verification, remembered cookie check-in, duplicate attendance prevention, inactive/expired membership blocking, self-registration, duplicate phone blocking, dashboard reflection, staff assistant response, “naya member add karo” intent, assistant registration dialogue to review/confirmation and save to database-backed member list, downloadable backup, automatic daily snapshot, attendance in snapshots, restore exactness, owner compressed backup, public API denial, invalid QR token and static assets.
+
+Limits: this was run locally against temporary file-backed data. No live Render deployment, real MongoDB Atlas connection, physical phone/browser QR scan, or real Gemini/WhatsApp provider was available in this test. Assistant dialogue was tested without a Gemini API key using local fallback. Deploy to a staging instance and verify with a backup before production rollout.
