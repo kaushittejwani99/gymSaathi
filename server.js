@@ -339,11 +339,20 @@ async function addPeriod(gymId, customerId, name, body, gym, today, more, owed) 
   await db.insert('memberships', { _id, gymId, customerId, ...plan, ...more, createdAt: stamp() });
   return () => pay(gymId, customerId, name, _id, paid, body.mode, today);
 }
+const staffList = (v) => (Array.isArray(v) ? v : []).slice(0, 50).map((s) => ({
+  name: G.str(s && s.name, 80),
+  phone: G.str(s && s.phone, 15),
+  designation: G.str(s && s.designation, 80),
+})).filter((s) => s.name || s.phone || s.designation).map((s) => ({
+  name: s.name || fail(400, "Every staff member needs a name."),
+  phone: s.phone ? phoneOf(s.phone) : "",
+  designation: s.designation || "Staff",
+}));
+
 const gymFields = (b) => ({
   name: required(b.name, 'The gym name', 80), owner: G.str(b.owner, 80), phone: G.str(b.phone, 30), address: G.str(b.address, 300), timings: G.str(b.timings, 150),
-  amenities: G.str(b.amenities, 400), upi: G.str(b.upi, 80), ...Object.fromEntries(['price1', 'price3', 'price6', 'price12', 'ptPrice', 'dietPrice'].map((k) => [k, amount(b[k] || 0, 'A price')])),
+  amenities: G.str(b.amenities, 400), upi: G.str(b.upi, 80), staff: staffList(b.staff), ...Object.fromEntries(['price1', 'price3', 'price6', 'price12', 'ptPrice', 'dietPrice'].map((k) => [k, amount(b[k] || 0, 'A price')])),
 });
-
 const open = {
   'POST /api/auth/login': async ({ body, req, res }) => {
     const email = G.str(body.email, 100).toLowerCase(), password = typeof body.password === 'string' ? body.password : '';
@@ -646,7 +655,7 @@ const adminRoutes = {
     }
     return gyms.map((g) => {
       const t = totals.get(g._id) || { members: 0, fee: 0, got: 0 };
-      return { id: g._id, email: g.email, gym: g.details.name, owner: g.details.owner, phone: g.details.phone, createdAt: g.createdAt, disabled: g.disabled, firstLoginAt: g.firstLoginAt,
+      return { id: g._id, email: g.email, gym: g.details.name, owner: g.details.owner, phone: g.details.phone,staff: g.details.staff || [], createdAt: g.createdAt, disabled: g.disabled, firstLoginAt: g.firstLoginAt,
         lastLoginAt: g.lastLoginAt, validTill: g.validTill, deletedAt: g.deletedAt || null, paidMonths: sum(g.renewals, 'months'), members: t.members, collected: t.got, due: t.fee - t.got,
         savedAt: (lastSave.get(g._id) || {}).at || null, savedPlace: (lastSave.get(g._id) || {}).place || '', savedDevice: (lastSave.get(g._id) || {}).device || '' };
     });
