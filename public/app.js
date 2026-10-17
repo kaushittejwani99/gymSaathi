@@ -1543,11 +1543,17 @@ async function regTurn(said, spoken) {
       rested(mine);
       return await says(r.say, { settings: true });
     } // the gym has no prices yet
-    if (r.cancel) {
-      reg = null;
+ if (r.cancel) {
+      reg = null; 
       rested(mine);
-      return await says(r.say);
-    } // 'cancel karo', said part of the way through
+      const spokenOk = await says(r.say, {
+        pending: r.pending,
+        remind: r.remind,
+        page: r.page,
+      });
+      if (spokenOk && r.pending && mine === turn) aside(listenNext(false, mine));
+      return spokenOk;
+    }//cel karo', said part of the way through
     Object.assign(reg, {
       form: r.form,
       asked: r.next,
@@ -2151,8 +2157,38 @@ const gymPrices = (g, must = "") =>
     .join("");
 const PRICE_HINT =
   "Leave 3, 6 or 12 months empty to charge the monthly price times the months.";
+  const staffRowHtml = (s = {}) => `<div class="grid three staff-row" style="margin-bottom: 8px; align-items: end;">
+  ${field("Staff name", input("staffName", s.name || "", 'maxlength="80" placeholder="e.g. Rohit Sharma"'))}
+  ${field("Mobile number", input("staffPhone", s.phone || "", 'type="tel" inputmode="numeric" maxlength="15" placeholder="10-digit mobile"'))}
+  <div class="row" style="align-items: flex-end; gap: 6px;">
+    <div style="flex: 1;">${field("Designation", input("staffDesignation", s.designation || "", 'maxlength="80" placeholder="e.g. Trainer, Manager"'))}</div>
+    <button type="button" class="btn ghost icon" data-action="staff-remove" aria-label="Remove staff" title="Remove">${icon("trash")}</button>
+  </div>
+</div>`;
 
-views.settings = () => {
+const gymStaff = (g) => {
+  const list = Array.isArray(g.staff) && g.staff.length ? g.staff : [];
+  return `<div class="staff-list">${list.map(staffRowHtml).join("")}</div>
+    <div style="margin-top: 8px;">
+      <button type="button" class="btn secondary" data-action="staff-add">${icon("plus")}Add staff member</button>
+    </div>`;
+};
+
+const readFormWithStaff = (form) => {
+  const data = fd(form);
+  delete data.staffName;
+  delete data.staffPhone;
+  delete data.staffDesignation;
+  data.staff = [...form.querySelectorAll(".staff-row")].map((row) => ({
+    name: (row.querySelector('[name="staffName"]') || {}).value || "",
+    phone: (row.querySelector('[name="staffPhone"]') || {}).value || "",
+    designation: (row.querySelector('[name="staffDesignation"]') || {}).value || "",
+  })).filter((s) => s.name.trim() || s.phone.trim() || s.designation.trim());
+  return data;
+};
+
+
+  views.settings = () => {
   const g = S.gym;
   return page(
     "Settings",
@@ -2161,6 +2197,8 @@ views.settings = () => {
     <form data-action="gym-save">
       <section class="card"><div class="card-head"><h2>Your gym</h2><span class="hint">The assistant and the WhatsApp messages use these.</span></div>
         <div class="card-body grid">${gymDetails(g)}</div></section>
+      <section class="card"><div class="card-head"><h2>Gym staff</h2><span class="hint">Trainers, managers and other staff working at this gym.</span></div>
+        <div class="card-body">${gymStaff(g)}</div></section>
       <section class="card"><div class="card-head"><h2>Prices</h2><span class="hint">${PRICE_HINT}</span></div>
         <div class="card-body grid three">${gymPrices(g)}</div></section>
       <div class="form-foot"><button class="btn primary">Save settings</button></div>
@@ -2182,9 +2220,17 @@ const passwordField = (label, name, auto) =>
   );
 
 Object.assign(actions, {
+  "staff-add"(el) {
+    const list = el.closest("div").previousElementSibling;
+    if (list) list.insertAdjacentHTML("beforeend", staffRowHtml({}));
+  },
+  "staff-remove"(el) {
+    const row = el.closest(".staff-row");
+    if (row) row.remove();
+  },
   // The owner of the service, editing a gym from the Accounts page, lands back on that page once it is saved.
   async "gym-save"(form) {
-    await api("PUT", "/api/gym", fd(form));
+    await api("PUT", "/api/gym", readFormWithStaff(form));
     toast("Settings saved");
     return view ? actions["view-close"]() : load();
   },
@@ -2324,13 +2370,14 @@ const add = `<button class="btn secondary" data-action="export-now" title="Downl
   );
 };
 Object.assign(actions, {
-  "account-new"() {
+ "account-new"() {
     openDialog(
       dialogForm(
         "Add gym",
         "account-save",
         "",
         `<h3 class="form-part">The gym and its owner</h3><div class="grid">${gymDetails({}, "required")}</div>
+      <h3 class="form-part">Gym staff (optional)</h3><p class="hint">Add trainers, managers or other staff with their name, mobile number and designation.</p>${gymStaff({ staff: [{}] })}
       <h3 class="form-part">Prices</h3><p class="hint">${PRICE_HINT}</p><div class="grid three">${gymPrices({}, "required")}</div>
       <h3 class="form-part">Login for the gym</h3><div class="grid">${field("Username", input("email", "", 'required maxlength="100" autocapitalize="none" spellcheck="false" autocomplete="off"'), "span2")}
       ${passwordField("Password (at least 8 characters)", "password", "new-password")}</div>`,
@@ -2339,7 +2386,7 @@ Object.assign(actions, {
     );
   },
   async "account-save"(form) {
-    await api("POST", "/api/admin/gyms", fd(form));
+    await api("POST", "/api/admin/gyms", readFormWithStaff(form));
     dlg.close();
     toast("Gym created. Give it its username and password.");
     await loadAccounts();
